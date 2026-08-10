@@ -1,0 +1,41 @@
+# Frontend dependencies and output
+node_modules/
+dist/
+coverage/
+
+# Rust and Tauri generated output
+target/
+src-tauri/target*/
+src-tauri/gen/
+*.pdb
+
+# Local build helpers and downloaded tools
+.codex-cargo-target*/
+.restart-build/
+.restart-runtime/
+tools/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Release artifacts
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm

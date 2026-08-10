@@ -1,0 +1,1 @@
+export { HaruhaApp as App } from "./app/HaruhaApp";
