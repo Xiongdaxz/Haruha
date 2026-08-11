@@ -16,6 +16,9 @@ use crate::{
     pac,
 };
 
+const CONFIG_DIR_NAME: &str = "Haruha";
+const LEGACY_PROJECT_CONFIG_DIR_NAME: &str = "proxy-manager-next";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -43,6 +46,7 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn load() -> Result<Self> {
+        migrate_project_named_config_dir()?;
         let dir = config_dir()?;
         fs::create_dir_all(&dir).with_context(|| format!("创建配置目录失败: {}", dir.display()))?;
         let path = dir.join("config.json");
@@ -124,7 +128,28 @@ impl ConfigStore {
 
 pub fn config_dir() -> Result<PathBuf> {
     let base = dirs::config_dir().context("无法获取系统配置目录")?;
-    Ok(base.join("proxy-manager-next"))
+    Ok(base.join(CONFIG_DIR_NAME))
+}
+
+fn migrate_project_named_config_dir() -> Result<()> {
+    let base = dirs::config_dir().context("无法获取系统配置目录")?;
+    migrate_project_named_config_dir_from(&base)
+}
+
+fn migrate_project_named_config_dir_from(base: &Path) -> Result<()> {
+    let legacy_dir = base.join(LEGACY_PROJECT_CONFIG_DIR_NAME);
+    let current_dir = base.join(CONFIG_DIR_NAME);
+    if current_dir.exists() || !legacy_dir.exists() {
+        return Ok(());
+    }
+
+    fs::rename(&legacy_dir, &current_dir).with_context(|| {
+        format!(
+            "迁移配置目录失败: {} -> {}",
+            legacy_dir.display(),
+            current_dir.display()
+        )
+    })
 }
 
 pub fn pac_file_path() -> Result<PathBuf> {
@@ -410,12 +435,44 @@ fn path_exists(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        convert_legacy, is_starter_profile, parse_legacy_bypass, sanitize_profile,
-        sanitize_unified_lists, LegacyConfig,
+        convert_legacy, is_starter_profile, migrate_project_named_config_dir_from,
+        parse_legacy_bypass, sanitize_profile, sanitize_unified_lists, LegacyConfig,
     };
     use crate::models::{
         default_pac_rules, default_profile, starter_pac_rules, ProxyMode, UnifiedLists,
     };
+    use std::{fs, time::SystemTime};
+
+    #[test]
+    fn migrates_project_named_config_directory_to_product_name() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("系统时间应晚于 Unix epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "haruha-config-migration-{}-{unique}",
+            std::process::id()
+        ));
+        let legacy_dir = base.join("proxy-manager-next");
+        let current_dir = base.join("Haruha");
+        fs::create_dir_all(legacy_dir.join("logs")).expect("应创建旧配置目录");
+        fs::write(legacy_dir.join("config.json"), "existing config").expect("应写入旧配置");
+        fs::write(legacy_dir.join("logs").join("app.log"), "existing log").expect("应写入旧日志");
+
+        migrate_project_named_config_dir_from(&base).expect("应迁移旧配置目录");
+
+        assert!(!legacy_dir.exists());
+        assert_eq!(
+            fs::read_to_string(current_dir.join("config.json")).expect("应读取新配置"),
+            "existing config"
+        );
+        assert_eq!(
+            fs::read_to_string(current_dir.join("logs").join("app.log")).expect("应读取新日志"),
+            "existing log"
+        );
+
+        fs::remove_dir_all(base).expect("应清理测试目录");
+    }
 
     #[test]
     fn parses_legacy_bypass_and_local_items() {

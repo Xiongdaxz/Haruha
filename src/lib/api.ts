@@ -284,7 +284,7 @@ export async function openConfigDirectory(): Promise<void> {
 }
 
 export async function getConfigDirectory(): Promise<string> {
-  if (!isTauri) return "%APPDATA%\\proxy-manager-next";
+  if (!isTauri) return "%APPDATA%\\Haruha";
   return invoke<string>("get_config_dir");
 }
 
