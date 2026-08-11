@@ -50,19 +50,21 @@ git diff --check
 仓库包含两个工作流：
 
 - `.github/workflows/ci.yml`：在推送到 `main`、Pull Request 和手动触发时运行。前端检查在 Ubuntu 执行；Windows x64、macOS、Linux x64/ARM64 运行 Rust 测试，Windows ARM64 执行交叉编译检查。
-- `.github/workflows/release.yml`：推送 `v*` 标签时运行。5 个架构打包任务并行执行，并把资产上传到同一个 GitHub 草稿 Release。
+- `.github/workflows/release.yml`：推送 `v*` 标签时运行。5 个架构打包任务并行执行，把资产上传到同一个 GitHub 草稿 Release，补充 Windows 免安装版，并统一资产名称和下载说明；也可手动触发来整理已有草稿。
 
 自动打包矩阵：
 
 | 平台 | 架构 | 资产 |
 | --- | --- | --- |
-| Windows | x64 | MSI、NSIS EXE 安装包 |
-| Windows | ARM64 | MSI、NSIS EXE 安装包 |
+| Windows | x64 | Portable EXE、NSIS EXE、MSI |
+| Windows | ARM64 | Portable EXE、NSIS EXE、MSI |
 | macOS | Intel + Apple Silicon 通用包 | App、DMG |
 | Linux | x64 | AppImage、DEB、RPM |
 | Linux | ARM64 | AppImage、DEB、RPM |
 
 Windows 不再提供 32 位 x86 包。macOS 的 Universal 包同时包含 x64 和 ARM64，不需要用户选择芯片版本。Actions runner 上成功编译属于“构建证据”，不等于真实设备上的“运行验证”。当前工作流也没有配置 Windows 代码签名证书、Apple Developer ID、公证凭据或 Linux 包签名密钥，因此自动资产默认未签名。
+
+GitHub 会按文件名排序，因此自动化使用两位序号固定展示顺序，并在每个文件名中明确写出平台、架构和格式：`01-03` 为 Windows x64，`04-06` 为 Windows ARM64，`07-08` 为 macOS Universal，`09-11` 为 Linux x64，`12-14` 为 Linux ARM64。Windows 每组都按 Portable、NSIS、MSI 排列；Portable EXE 可以直接运行，但仍依赖系统 WebView2，并会在用户配置目录保存数据。
 
 ## 4. 提交并触发标签发布
 

@@ -4,17 +4,24 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag to normalize
+        required: true
+        default: v0.1.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
     name: Package ${{ matrix.name }}
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -44,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -114,3 +121,113 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Attach portable Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ("${{ matrix.name }}" -eq "Windows ARM64") {
+            $source = "src-tauri/target/aarch64-pc-windows-msvc/release/proxy-manager-next.exe"
+            $assetName = "04-Haruha-" + $tag + "-Windows-ARM64-Portable.exe"
+          }
+          else {
+            $source = "src-tauri/target/release/proxy-manager-next.exe"
+            $assetName = "01-Haruha-" + $tag + "-Windows-x64-Portable.exe"
+          }
+          $destination = Join-Path $env:RUNNER_TEMP $assetName
+          Copy-Item -LiteralPath $source -Destination $destination
+          gh release upload $tag $destination --repo $env:GITHUB_REPOSITORY --clobber
+
+  windows_portable:
+    name: Build portable ${{ matrix.name }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            rust_target: ""
+            executable_path: src-tauri/target/release/proxy-manager-next.exe
+            asset_order: "01"
+            asset_arch: x64
+          - name: Windows ARM64
+            rust_target: aarch64-pc-windows-msvc
+            executable_path: src-tauri/target/aarch64-pc-windows-msvc/release/proxy-manager-next.exe
+            asset_order: "04"
+            asset_arch: ARM64
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify release version and tag
+        run: bun run release:verify-version "${{ inputs.tag }}"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add cross-compilation target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build portable executable
+        shell: pwsh
+        run: |
+          $tauriArgs = @("x", "tauri", "build", "--no-bundle")
+          if ("${{ matrix.rust_target }}" -ne "") {
+            $tauriArgs += @("--target", "${{ matrix.rust_target }}")
+          }
+          & bun @tauriArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Portable build failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Attach portable executable to draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.tag }}"
+          $assetName = "${{ matrix.asset_order }}-Haruha-" + $tag + "-Windows-${{ matrix.asset_arch }}-Portable.exe"
+          $destination = Join-Path $env:RUNNER_TEMP $assetName
+          Copy-Item -LiteralPath "${{ matrix.executable_path }}" -Destination $destination
+          gh release upload $tag $destination --repo $env:GITHUB_REPOSITORY --clobber
+
+  normalize-release:
+    name: Normalize draft asset names and release notes
+    needs: [build, windows_portable]
+    if: ${{ always() && ((github.event_name == 'push' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.windows_portable.result == 'success')) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v5
+
+      - name: Normalize draft release
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        with:
+          script: |
+            const normalizeRelease = require("./scripts/normalize-github-release-assets.cjs");
+            await normalizeRelease({ github, context, core });

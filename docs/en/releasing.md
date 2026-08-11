@@ -50,19 +50,21 @@ Do not describe a platform as “verified” merely because TypeScript or Rust c
 The repository contains two workflows:
 
 - `.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and manual dispatch. Frontend checks run on Ubuntu; Windows x64, macOS, and Linux x64/ARM64 run Rust tests, while Windows ARM64 receives a cross-compilation check.
-- `.github/workflows/release.yml` runs when a `v*` tag is pushed. Five architecture packaging jobs run in parallel and upload assets to the same draft GitHub Release.
+- `.github/workflows/release.yml` runs when a `v*` tag is pushed. Five architecture packaging jobs run in parallel, upload assets to the same draft GitHub Release, add portable Windows executables, and normalize asset names and download guidance. It can also be dispatched manually to normalize an existing draft.
 
 Automated packaging matrix:
 
 | Platform | Architecture | Assets |
 | --- | --- | --- |
-| Windows | x64 | MSI and NSIS EXE installers |
-| Windows | ARM64 | MSI and NSIS EXE installers |
+| Windows | x64 | Portable EXE, NSIS EXE, and MSI |
+| Windows | ARM64 | Portable EXE, NSIS EXE, and MSI |
 | macOS | Universal Intel + Apple Silicon | App and DMG |
 | Linux | x64 | AppImage, DEB, and RPM |
 | Linux | ARM64 | AppImage, DEB, and RPM |
 
 32-bit Windows x86 packages are intentionally omitted. The macOS Universal build contains both x64 and ARM64, so users do not choose a chip-specific package. A successful Actions build is build evidence, not runtime validation on a real device. The workflow currently has no Windows code-signing certificate, Apple Developer ID or notarization credentials, or Linux package-signing key, so automated assets are unsigned by default.
+
+GitHub sorts assets by filename, so automation uses two-digit prefixes for a stable display order and states the platform, architecture, and format in every name: `01-03` for Windows x64, `04-06` for Windows ARM64, `07-08` for macOS Universal, `09-11` for Linux x64, and `12-14` for Linux ARM64. Each Windows group is ordered Portable, NSIS, then MSI. A Portable EXE runs without installation, but still depends on the system WebView2 runtime and stores data in the user configuration directory.
 
 ## 4. Commit and trigger a tagged release
 

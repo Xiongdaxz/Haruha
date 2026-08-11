@@ -6,6 +6,14 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [
 
 ## Unreleased
 
+### 中文
+
+- 统一 GitHub Release 资产的排序与平台命名，并新增 Windows x64/ARM64 免安装可执行文件和中英文下载对照表。
+
+### English
+
+- Standardized GitHub Release asset ordering and platform names, and added portable Windows x64/ARM64 executables with a bilingual download guide.
+
 ## 0.1.0 - 2026-08-11
 
 ### 中文
