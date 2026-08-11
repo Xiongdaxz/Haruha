@@ -190,6 +190,9 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Build frontend for portable packaging
+        run: bun run build
+
       - name: Build portable executable
         shell: pwsh
         run: |
