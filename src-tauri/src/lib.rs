@@ -603,12 +603,17 @@ mod tray_icon_tests {
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let current_state = logical_current_proxy_state(&app.state::<AppState>());
-    WebviewWindowBuilder::new(app, "tray", WebviewUrl::App("index.html?view=tray".into()))
-        .title("Haruha 快捷面板")
-        .inner_size(TRAY_PANEL_WIDTH, TRAY_PANEL_HEIGHT)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
+    let tray_window_builder =
+        WebviewWindowBuilder::new(app, "tray", WebviewUrl::App("index.html?view=tray".into()))
+            .title("Haruha 快捷面板")
+            .inner_size(TRAY_PANEL_WIDTH, TRAY_PANEL_HEIGHT)
+            .resizable(false)
+            .decorations(false);
+
+    #[cfg(not(target_os = "macos"))]
+    let tray_window_builder = tray_window_builder.transparent(true);
+
+    tray_window_builder
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
