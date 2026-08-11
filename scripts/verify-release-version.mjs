@@ -28,7 +28,11 @@ if (
   process.exit(1);
 }
 
-const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
+const tag =
+  process.argv[2] ??
+  (process.env.GITHUB_REF_TYPE === "tag"
+    ? process.env.GITHUB_REF_NAME
+    : undefined);
 const expectedTag = `v${packageVersion}`;
 
 if (tag && tag !== expectedTag) {
