@@ -1,5 +1,7 @@
 param(
-  [switch]$Json
+  [switch]$Json,
+  [ValidateSet("x64", "arm64", "all")]
+  [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,6 +83,34 @@ function Test-WindowsSdkLib {
   }
 }
 
+function Test-WindowsArm64Component {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string[]]$Patterns
+  )
+
+  foreach ($pattern in $Patterns) {
+    $match = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+      Sort-Object FullName -Descending |
+      Select-Object -First 1
+    if ($null -ne $match) {
+      return [pscustomobject]@{
+        name = $Name
+        found = $true
+        path = $match.FullName
+        version = $null
+      }
+    }
+  }
+
+  [pscustomobject]@{
+    name = $Name
+    found = $false
+    path = $null
+    version = $null
+  }
+}
+
 $commands = @(
   Test-Command "bun"
   Test-Command "node"
@@ -92,11 +122,27 @@ $commands = @(
   Test-WindowsSdkLib
 )
 
+if ($Architecture -in @("arm64", "all")) {
+  $commands += Test-WindowsArm64Component "msvc-arm64-cl" @(
+    "C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe",
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe"
+  )
+  $commands += Test-WindowsArm64Component "windows-sdk-arm64-lib" @(
+    "C:\Program Files (x86)\Windows Kits\10\Lib\*\um\arm64\kernel32.lib",
+    "C:\Program Files\Windows Kits\10\Lib\*\um\arm64\kernel32.lib"
+  )
+}
+
 $required = @("bun", "node", "rustc", "cargo")
 if ($IsWindows -or $env:OS -eq "Windows_NT") {
   $required += "cl"
   $required += "link"
   $required += "windows-sdk-lib"
+  if ($Architecture -in @("arm64", "all")) {
+    $required += "msvc-arm64-cl"
+    $required += "windows-sdk-arm64-lib"
+  }
 }
 
 $summary = [pscustomobject]@{
@@ -104,7 +150,8 @@ $summary = [pscustomobject]@{
   commands = $commands
   notes = @(
     "Tauri/Rust 构建需要 rustc 和 cargo。",
-    "Windows 打包通常还需要 MSVC C++ Build Tools 和 Windows SDK。"
+    "Windows 打包通常还需要 MSVC C++ Build Tools 和 Windows SDK。",
+    "Windows ARM64 交叉编译需要额外安装 MSVC ARM64 C++ 工具和 ARM64 Windows SDK 库。"
   )
 }
 

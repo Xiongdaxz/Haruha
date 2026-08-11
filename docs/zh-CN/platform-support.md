@@ -9,11 +9,12 @@
 | PAC Auto Proxy URL | 是 | 是 | GNOME 系桌面 |
 | 绕过名单 | 是 | 是 | GNOME 系桌面 |
 | 托盘面板 | 已实现并验证 | 当前能力声明为否 | 当前能力声明为否 |
-| 打包证据 | EXE/MSI | 尚无正式 `.app`/`.dmg` 证据 | 尚无正式包证据 |
+| 自动打包配置 | x64/ARM64 MSI、NSIS | x64 + ARM64 Universal App、DMG | x64/ARM64 AppImage、DEB、RPM |
+| 当前真实证据 | x64 EXE/MSI | 尚无正式 `.app`/`.dmg` 证据 | 尚无正式包证据 |
 
 ## Windows
 
-通过当前用户注册表 `Internet Settings` 与 WinINet 刷新系统代理。主要开发和打包链路已经在 Windows 上运行过；公开版本仍应按发布指南在干净机器复验。
+通过当前用户注册表 `Internet Settings` 与 WinINet 刷新系统代理。主要开发和 x64 打包链路已经在 Windows 上运行过；ARM64 当前只有自动交叉编译配置，公开版本仍应按发布指南在对应架构的干净机器复验。
 
 ## macOS
 

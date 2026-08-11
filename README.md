@@ -52,7 +52,7 @@ Haruha 使用 Tauri 2、React 19 和 Rust 构建。它负责配置操作系统�
 - Windows 打包还需要 Visual Studio 2022“使用 C++ 的桌面开发”和 Windows SDK
 
 ```powershell
-cd D:\proxy-manager-next
+cd proxy-manager-next
 bun install --frozen-lockfile
 bun run tauri:dev
 ```

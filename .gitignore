@@ -39,3 +39,4 @@ Thumbs.db
 *.AppImage
 *.deb
 *.rpm
+SHA256SUMS.txt

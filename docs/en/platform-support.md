@@ -9,11 +9,12 @@ English | [简体中文](../zh-CN/platform-support.md)
 | PAC Auto Proxy URL | Yes | Yes | GNOME-family desktops |
 | Bypass list | Yes | Yes | GNOME-family desktops |
 | Tray panel | Implemented and verified | Capability currently reports false | Capability currently reports false |
-| Packaging evidence | EXE/MSI | No formal `.app`/`.dmg` evidence | No formal package evidence |
+| Automated packaging | x64/ARM64 MSI and NSIS | x64 + ARM64 Universal App and DMG | x64/ARM64 AppImage, DEB, and RPM |
+| Current real evidence | x64 EXE/MSI | No formal `.app`/`.dmg` evidence | No formal package evidence |
 
 ## Windows
 
-Uses the current user's `Internet Settings` registry values and WinINet refresh calls. The main development and packaging paths have run on Windows; every public version must still be revalidated on a clean machine as described in the release guide.
+Uses the current user's `Internet Settings` registry values and WinINet refresh calls. The main development and x64 packaging paths have run on Windows; ARM64 currently has automated cross-compilation configuration only. Every public version must still be revalidated on a clean machine of the corresponding architecture as described in the release guide.
 
 ## macOS
 

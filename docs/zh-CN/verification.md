@@ -23,7 +23,9 @@ bun run test:rust
 git diff --check
 ```
 
-CI 在 Windows runner 执行同类检查。平台相关改动还必须提供人工运行步骤和结果。
+CI 在 Ubuntu runner 执行前端检查和 Rust 格式检查；Windows x64、macOS、Linux x64/ARM64 分别执行 Rust 单元测试，Windows ARM64 执行交叉编译检查。平台相关改动还必须提供人工运行步骤和结果。
+
+`v*` 标签触发的 Release 工作流会运行 Windows x64/ARM64、macOS Universal、Linux x64/ARM64 共 5 个打包任务并创建草稿 Release。该结果属于证据等级 3；只有在对应真实设备上完成检查，才能提升为等级 4 或 5。
 
 ## 人工检查清单
 
@@ -47,3 +49,5 @@ CI 在 Windows runner 执行同类检查。平台相关改动还必须提供人�
 - `bun run tauri:build:windows -- -NoBundle`：生成 Windows release EXE
 
 项目历史验证还覆盖 Windows MSI 和主要托盘交互，但本次迁移没有重新生成 MSI，也没有做新的安装/运行 E2E。macOS 和 Linux 尚无正式真实设备交付证据。具体命令结果仍应以当前仓库最新 CI/本地输出为准。
+
+2026-08-11 新增的多平台 CI/Release 配置在推送到 GitHub 前只完成本地静态检查，尚不能视为实际 Actions 运行成功。

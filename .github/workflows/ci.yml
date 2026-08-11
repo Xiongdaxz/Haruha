@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    runs-on: windows-latest
-    timeout-minutes: 30
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,22 +27,98 @@ jobs:
         with:
           bun-version: "1.3.11"
 
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify release version consistency
+        run: bun run release:verify-version
+
+      - name: TypeScript check
+        run: bun run check
+
+      - name: Production build
+        run: bun run build
+
+  rust-format:
+    name: Rust formatting
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
-      - name: TypeScript check
-        run: bun run check
+  rust-validation:
+    name: Rust validation (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64 tests
+            os: windows-latest
+            rust_target: ""
+            validation: test
+          - name: Windows ARM64 cross-check
+            os: windows-latest
+            rust_target: aarch64-pc-windows-msvc
+            validation: check
+          - name: macOS tests
+            os: macos-latest
+            rust_target: ""
+            validation: test
+          - name: Linux x64 tests
+            os: ubuntu-22.04
+            rust_target: ""
+            validation: test
+          - name: Linux ARM64 tests
+            os: ubuntu-24.04-arm
+            rust_target: ""
+            validation: test
 
-      - name: Frontend build
-        run: bun run build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Rust formatting
-        run: bun run format:rust:check
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add cross-compilation target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Rust tests
-        run: bun run test:rust
+        if: matrix.validation == 'test'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Rust cross-architecture check
+        if: matrix.validation == 'check'
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --target ${{ matrix.rust_target }}

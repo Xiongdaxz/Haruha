@@ -1,6 +1,10 @@
 param(
   [string]$Proxy = "",
-  [switch]$NoBundle
+  [switch]$NoBundle,
+  [ValidateSet("x64", "arm64", "all")]
+  [string]$Architecture = "x64",
+  [ValidateSet("msi", "nsis", "all")]
+  [string]$Bundles = "msi"
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,23 +58,63 @@ try {
     throw "Visual Studio C++ Build Tools were not found. Install the Desktop development with C++ workload and Windows SDK."
   }
 
-  $vsEnv = cmd /s /c "`"$VsDevCmd`" -arch=x64 -host_arch=x64 >nul && set"
-  foreach ($line in $vsEnv) {
-    $idx = $line.IndexOf("=")
-    if ($idx -gt 0) {
-      [Environment]::SetEnvironmentVariable($line.Substring(0, $idx), $line.Substring($idx + 1), "Process")
-    }
-  }
-
-  $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-  if ($NoBundle) {
-    bun x tauri build --no-bundle
+  $Architectures = if ($Architecture -eq "all") {
+    @("x64", "arm64")
   }
   else {
-    bun x tauri build --bundles msi
+    @($Architecture)
   }
-  if ($LASTEXITCODE -ne 0) {
-    throw "Tauri build failed with exit code $LASTEXITCODE."
+  $BundleList = if ($Bundles -eq "all") { "msi,nsis" } else { $Bundles }
+
+  foreach ($CurrentArchitecture in $Architectures) {
+    $TargetTriple = if ($CurrentArchitecture -eq "arm64") {
+      "aarch64-pc-windows-msvc"
+    }
+    else {
+      $null
+    }
+
+    if ($TargetTriple) {
+      $InstalledTargets = & rustup target list --installed
+      if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read installed Rust targets."
+      }
+      if ($InstalledTargets -notcontains $TargetTriple) {
+        & rustup target add $TargetTriple
+        if ($LASTEXITCODE -ne 0) {
+          throw "Unable to install Rust target $TargetTriple."
+        }
+      }
+    }
+
+    $vsEnv = cmd /s /c "`"$VsDevCmd`" -arch=$CurrentArchitecture -host_arch=x64 >nul && set"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to initialize Visual Studio tools for $CurrentArchitecture. Install the matching MSVC C++ build tools and Windows SDK."
+    }
+    foreach ($line in $vsEnv) {
+      $idx = $line.IndexOf("=")
+      if ($idx -gt 0) {
+        [Environment]::SetEnvironmentVariable($line.Substring(0, $idx), $line.Substring($idx + 1), "Process")
+      }
+    }
+
+    $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+    $TauriArgs = @("x", "tauri", "build")
+    if ($NoBundle) {
+      $TauriArgs += "--no-bundle"
+    }
+    else {
+      $TauriArgs += @("--bundles", $BundleList)
+    }
+    if ($TargetTriple) {
+      $TauriArgs += @("--target", $TargetTriple)
+    }
+
+    Write-Host "Building Haruha for Windows $CurrentArchitecture..."
+    & bun @TauriArgs
+    if ($LASTEXITCODE -ne 0) {
+      throw "Tauri build for Windows $CurrentArchitecture failed with exit code $LASTEXITCODE."
+    }
   }
 }
 finally {

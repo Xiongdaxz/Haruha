@@ -23,7 +23,9 @@ bun run test:rust
 git diff --check
 ```
 
-CI runs equivalent checks on a Windows runner. Platform behavior changes also require documented manual steps and results.
+CI runs frontend checks and Rust formatting on an Ubuntu runner. Windows x64, macOS, and Linux x64/ARM64 run Rust unit tests, while Windows ARM64 receives a cross-compilation check. Platform behavior changes also require documented manual steps and results.
+
+The Release workflow triggered by `v*` tags runs five packaging jobs—Windows x64/ARM64, macOS Universal, and Linux x64/ARM64—and creates a draft Release. That outcome is evidence level 3; only checks on the corresponding real devices can raise it to level 4 or 5.
 
 ## Manual checklist
 
@@ -47,3 +49,5 @@ The open-source migration snapshot passed these checks on 2026-08-10:
 - `bun run tauri:build:windows -- -NoBundle`: generated the Windows release EXE
 
 Historical project evidence also covers a Windows MSI and primary tray interaction. This migration did not rebuild the MSI or run a new installer/runtime E2E. macOS and Linux still have no formal real-device delivery evidence. Current repository CI/local output remains the source of truth for exact command results.
+
+The multi-platform CI/Release configuration added on 2026-08-11 has only undergone local static checks until it is pushed to GitHub; it is not yet evidence of a successful Actions run.
