@@ -5,6 +5,9 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(windows)]
+pub use windows::SystemProxySnapshot;
+
 use anyhow::Result;
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
@@ -92,6 +95,16 @@ pub fn disable_proxy() -> Result<()> {
     {
         anyhow::bail!("当前平台暂不支持关闭系统代理")
     }
+}
+
+#[cfg(windows)]
+pub fn capture_system_proxy_snapshot() -> Result<SystemProxySnapshot> {
+    windows::capture_system_proxy_snapshot()
+}
+
+#[cfg(windows)]
+pub fn restore_system_proxy_snapshot(snapshot: &SystemProxySnapshot) -> Result<()> {
+    windows::restore_system_proxy_snapshot(snapshot)
 }
 
 pub fn network_traffic_totals() -> Result<(u64, u64)> {

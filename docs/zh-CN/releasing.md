@@ -98,7 +98,7 @@ git push origin v0.1.0
 Windows 本地哈希示例：
 
 ```powershell
-Get-FileHash .\src-tauri\target\release\proxy-manager-next.exe -Algorithm SHA256
+Get-FileHash .\src-tauri\target\release\Haruha.exe -Algorithm SHA256
 Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
   Get-FileHash -Algorithm SHA256
 ```
@@ -121,7 +121,7 @@ bun run tauri:build:windows:all -- -Proxy http://127.0.0.1:7890
 典型输出：
 
 ```text
-src-tauri/target/release/proxy-manager-next.exe
+src-tauri/target/release/Haruha.exe
 src-tauri/target/release/bundle/msi/*.msi
 src-tauri/target/release/bundle/nsis/*-setup.exe
 src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi

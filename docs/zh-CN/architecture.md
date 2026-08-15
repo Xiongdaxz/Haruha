@@ -49,6 +49,7 @@ flowchart LR
 | `src-tauri/src/pac.rs` | PAC 规则归一化、去重和脚本生成 |
 | `src-tauri/src/pac_server.rs` | 只监听回环地址的 PAC HTTP 服务 |
 | `src-tauri/src/net.rs` | 代理连接测试、IP 查询和下载测速 |
+| `src-tauri/src/traffic_monitor.rs` | Windows 提权 ETW 应用流量采集、会话累计和应用图标读取 |
 | `src-tauri/src/platform/` | 各操作系统的代理状态读取和写入适配器 |
 | `src-tauri/capabilities/` | Tauri 窗口权限边界 |
 | `scripts/` | 环境检查、通用 Cargo 代理包装和 Windows 发布辅助脚本 |
@@ -85,7 +86,8 @@ Tauri command 按职责分组：
 
 - 配置：`get_active_profile`、`save_profile`、`get_unified_lists`、`save_unified_lists`
 - 模式：`get_proxy_state`、`enable_manual`、`enable_pac`、`disable_proxy`
-- 网络：`test_proxy`、`refresh_ip_info`、`run_proxy_speed_test`、`get_network_traffic_sample`
+- 网络：`test_proxy`、`refresh_ip_info`、`run_proxy_speed_test`、`run_direct_speed_test`、`get_network_traffic_sample`
+- 应用流量：`get_traffic_monitor_capability`、`start_traffic_monitor`、`get_traffic_monitor_snapshot`、`stop_traffic_monitor`、`get_traffic_application_icon`
 - 本地能力：日志、配置目录、快捷站点图标、受限外部 URL 打开
 - 窗口/托盘：显示主窗口、隐藏托盘面板、退出
 
@@ -130,9 +132,15 @@ sequenceDiagram
 
 优先端口为 `18765`；被占用时自动选择可用回环端口。应用恢复时，如果保存模式是 PAC，会重新启动服务并重写动态 URL。
 
+### 流量监控
+
+Windows 系统网卡曲线和应用累计是两条独立数据链：系统曲线每秒读取已启用物理网卡的累计计数器，排除虚拟网卡与回环网卡，并只在内存中保留最近 60 个点；应用统计在本次 Haruha 运行期间首次开启监控时通过 UAC 启动同一可执行文件的独立提权 Helper，使用 ETW 覆盖 TCP/UDP 与 IPv4/IPv6，并通过仅限本机的随机命名管道每 5 秒返回一次累计快照。
+
+应用采集器只累计 PID、方向和字节数，再按可执行文件合并多进程；回环流量被排除，“系统/未知”保留为独立统计项。该状态由应用壳持有，因此切换页面或隐藏到托盘不会中断。手动关闭监控会真正停止 ETW 并清空本次数据，但保留不采集数据的空闲 Helper；同一次 Haruha 运行内重新开启会复用该 Helper、从零开始且不再请求 UAC。明确退出 Haruha 时会关闭 Helper。UAC 被取消、采集器连接超时或 ETW 异常时返回明确错误，不回退到估算数据，也不影响系统网卡曲线继续工作。macOS/Linux 的能力查询会明确返回不支持应用拆分。
+
 ### 关闭与退出
 
-关闭模式先关闭系统代理，再停止 PAC 服务并持久化 `mode=off`。普通关闭主窗口只隐藏到托盘；明确退出时会尝试先关闭系统代理。进程被强制终止时无法保证清理完成。
+关闭模式先关闭系统代理，再停止 PAC 服务并持久化 `mode=off`。普通关闭主窗口只隐藏到托盘；明确退出时会停止应用流量采集，并尝试先关闭系统代理。进程被强制终止时无法保证清理完成。
 
 ## 8. 平台适配
 
@@ -144,15 +152,16 @@ sequenceDiagram
 
 ## 9. 网络与隐私边界
 
-除用户配置的代理外，当前网络功能可能访问：Google 连通性测试、多个公网 IP 信息服务、Cloudflare 默认测速地址、Google/DuckDuckGo/目标网站图标地址，以及用户点击的快捷站点。第三方服务可能观察到请求 IP、User-Agent 和目标域名。
+除用户配置的代理外，当前网络功能可能访问：Google 连通性测试、多个公网 IP 信息服务、Cloudflare 默认代理测速地址、腾讯云镜像默认直连测速地址、Google/DuckDuckGo/目标网站图标地址，以及用户点击的快捷站点。第三方服务可能观察到请求 IP、User-Agent 和目标域名。
 
-Haruha 当前没有遥测或分析模块。流量概览读取系统全部网卡的累计收发字节，不抓包、不读取传输内容，也不能表示“仅代理流量”。
+Haruha 当前没有遥测或分析模块。系统流量概览读取已启用物理网卡的累计收发字节，排除虚拟与回环网卡，但仍不能表示“仅代理流量”。Windows 应用统计依赖后台持续接收 ETW 网络事件以保证累计准确，只累计 PID、收发方向和字节数，并在本机解析应用名称/图标；源/目的地址仅在事件回调中瞬时用于排除回环，随后立即丢弃，不会返回或保存网络内容、域名、IP 地址、端口、逐秒历史或应用实时速率。所有应用累计仅保存在内存中，关闭监控或退出后清空。
 
 ## 10. 安全模型
 
 - PAC 服务绑定 `127.0.0.1`，不监听局域网地址。
 - 外部打开命令只接受 `http://` 或 `https://` URL。
 - Tauri capability 只授予主窗口和托盘窗口所需的 core/window 权限。
+- Windows 应用流量采集在每次 Haruha 运行期间首次开启时必须由用户确认 UAC；关闭监控后提权 Helper 仅空闲等待，不继续运行 ETW，明确退出应用时销毁。主进程与 Helper 通过随机命名管道、会话令牌和采集轮次握手，拒绝远程管道客户端。
 - 配置写入当前用户目录；任何日志和配置都不得提交到公开仓库。
 - 平台适配器是最高风险边界，所有写操作必须返回明确错误，不能伪造成功。
 - 当前应用未实现自动更新和签名验证；公开发布时应对安装包签名并公布 SHA-256。

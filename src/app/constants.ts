@@ -2,6 +2,7 @@ import {
   Cog,
   FolderOpen,
   Globe2,
+  Info,
   Leaf,
   Monitor,
   Moon,
@@ -10,10 +11,13 @@ import {
   Sunset,
   Waypoints,
 } from "lucide-react";
+import packageMetadata from "../../package.json";
 import type { QuickSite, QuickSiteCategory } from "../lib/types";
 import type { NavKey, ResizableNavKey, SettingsKey, ThemePreference } from "./types";
 
 export const APP_NAME = "Haruha";
+export const APP_VERSION = packageMetadata.version;
+export const OPEN_SOURCE_REPOSITORY_URL = "https://github.com/Xiongdaxz/Haruha";
 export const SPLIT_HANDLE_WIDTH = 16;
 export const SPLIT_LIMITS: Record<ResizableNavKey, { minLeft: number; minRight: number }> = {
   config: { minLeft: 320, minRight: 470 },
@@ -24,6 +28,8 @@ export const SPLIT_STORAGE_KEYS: Record<ResizableNavKey, string> = {
   pac: "haruha.split.pac.leftWidth",
 };
 export const THEME_STORAGE_KEY = "haruha.appearance.theme";
+export const THEME_PREFERENCE_CHANGED_EVENT = "theme-preference-changed";
+export const DEFAULT_PAC_URL = "http://127.0.0.1:18765/proxy.pac";
 export const SPEED_TEST_STORAGE_KEY = "haruha.speedTest.config";
 export const SPEED_TEST_HISTORY_STORAGE_KEY = "haruha.speedTest.history";
 export const ProxyIcon = Waypoints;
@@ -31,8 +37,8 @@ export const PacIcon = Globe2;
 
 export const navItems = [
   { key: "overview", label: "总览", icon: Leaf },
-  { key: "config", label: "配置", icon: ProxyIcon },
-  { key: "pac", label: "PAC规则", icon: PacIcon },
+  { key: "config", label: "手动代理", icon: ProxyIcon },
+  { key: "pac", label: "PAC自动", icon: PacIcon },
   { key: "settings", label: "设置", icon: Cog },
 ] satisfies Array<{ key: NavKey; label: string; icon: typeof Leaf }>;
 
@@ -40,6 +46,7 @@ export const settingsItems = [
   { key: "appearance", label: "外观", description: "主题与预览", icon: Palette },
   { key: "unified-lists", label: "代理名单", description: "统一直连/代理名单", icon: ProxyIcon },
   { key: "config-directory", label: "配置目录", description: "查看配置、日志与缓存", icon: FolderOpen },
+  { key: "about", label: "关于", description: "版本与开源信息", icon: Info },
 ] satisfies Array<{ key: SettingsKey; label: string; description: string; icon: typeof Leaf }>;
 
 export const themeOptions = [
@@ -130,30 +137,6 @@ export const quickSiteCategories = [
   { key: "media", label: "媒体" },
 ] satisfies Array<{ key: QuickSiteCategory; label: string }>;
 
-export const builtinDirectDomains = [
-  ".cn",
-  ".com.cn",
-  ".net.cn",
-  ".org.cn",
-  "baidu.com",
-  "qq.com",
-  "163.com",
-  "126.com",
-  "taobao.com",
-  "tmall.com",
-  "jd.com",
-  "alipay.com",
-  "weibo.com",
-  "wechat.com",
-  "weixin.qq.com",
-  "bilibili.com",
-  "youku.com",
-  "iqiyi.com",
-  "aliyun.com",
-  "tencent.com",
-  "huawei.com",
-] as const;
-
 export const quickSites: QuickSite[] = [
   quickSite("chatgpt", "ChatGPT", "https://chatgpt.com/", "chatgpt.com", "ai"),
   quickSite("claude", "Claude", "https://claude.ai/", "claude.ai", "ai"),
@@ -163,20 +146,21 @@ export const quickSites: QuickSite[] = [
   quickSite("grok", "Grok", "https://grok.com/", "grok.com", "ai"),
   quickSite("copilot", "Copilot", "https://copilot.microsoft.com/", "copilot.microsoft.com", "ai"),
   quickSite("deepseek", "DeepSeek", "https://chat.deepseek.com/", "deepseek.com", "ai"),
-  quickSite("poe", "Poe", "https://poe.com/", "poe.com", "ai"),
+  quickSite("meta-ai", "Meta AI", "https://www.meta.ai/", "meta.ai", "ai"),
   quickSite("huggingface", "Hugging Face", "https://huggingface.co/", "huggingface.co", "ai"),
-  quickSite("mistral", "Le Chat", "https://chat.mistral.ai/", "mistral.ai", "ai"),
+  quickSite("doubao", "豆包", "https://www.doubao.com/", "doubao.com", "ai"),
   quickSite("google-ai-studio", "Google AI Studio", "https://aistudio.google.com/", "aistudio.google.com", "ai"),
   quickSite("notebooklm", "NotebookLM", "https://notebooklm.google.com/", "notebooklm.google.com", "ai"),
   quickSite("midjourney", "Midjourney", "https://www.midjourney.com/", "midjourney.com", "ai"),
   quickSite("kimi", "Kimi", "https://www.kimi.com/", "kimi.com", "ai"),
-  quickSite("qwen", "Qwen", "https://chat.qwen.ai/", "qwen.ai", "ai"),
-  quickSite("suno", "Suno", "https://suno.com/", "suno.com", "ai"),
+  quickSite("qwen", "千问", "https://www.qianwen.com/", "qianwen.com", "ai"),
+  quickSite("chatglm", "智谱清言", "https://chatglm.cn/", "chatglm.cn", "ai"),
   quickSite("x", "X", "https://x.com/", "x.com", "social"),
   quickSite("instagram", "Instagram", "https://www.instagram.com/", "instagram.com", "social"),
   quickSite("youtube", "YouTube", "https://www.youtube.com/", "youtube.com", "social"),
   quickSite("tiktok", "TikTok", "https://www.tiktok.com/", "tiktok.com", "social"),
   quickSite("reddit", "Reddit", "https://www.reddit.com/", "reddit.com", "social"),
+  quickSite("linux-do", "LINUX DO", "https://linux.do/", "linux.do", "social"),
   quickSite("discord", "Discord", "https://discord.com/", "discord.com", "social"),
   quickSite("telegram", "Telegram", "https://web.telegram.org/", "telegram.org", "social"),
   quickSite("facebook", "Facebook", "https://www.facebook.com/", "facebook.com", "social"),
@@ -190,6 +174,8 @@ export const quickSites: QuickSite[] = [
   quickSite("quora", "Quora", "https://www.quora.com/", "quora.com", "social"),
   quickSite("tumblr", "Tumblr", "https://www.tumblr.com/", "tumblr.com", "social"),
   quickSite("line", "LINE", "https://line.me/", "line.me", "social"),
+  quickSite("bocha-search-api", "博查搜索 API", "https://open.bochaai.com/", "open.bochaai.com", "dev"),
+  quickSite("brave-search-api", "Brave Search API", "https://brave.com/search/api/", "brave.com", "dev"),
   quickSite("github", "GitHub", "https://github.com/", "github.com", "dev"),
   quickSite("stackoverflow", "Stack Overflow", "https://stackoverflow.com/", "stackoverflow.com", "dev"),
   quickSite("gitlab", "GitLab", "https://gitlab.com/", "gitlab.com", "dev"),

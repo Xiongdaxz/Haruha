@@ -4,7 +4,7 @@ use crate::models::{PlatformCapabilities, ProxyMode, ProxyProfile, ProxyState, U
 
 pub fn capabilities() -> PlatformCapabilities {
     let desktop = current_desktop();
-    let supported = is_gnome_like(&desktop) || is_kde_like(&desktop);
+    let supported = is_gnome_like(&desktop);
     PlatformCapabilities {
         manual_proxy: supported,
         pac_proxy: supported,
@@ -12,10 +12,14 @@ pub fn capabilities() -> PlatformCapabilities {
         global_shortcut: false,
         auto_start: false,
         requires_elevated_permission: false,
-        details: vec![format!(
-            "桌面环境: {}",
-            desktop.unwrap_or_else(|| "未知".to_string())
-        )],
+        details: vec![if is_kde_like(&desktop) {
+            "已检测到 KDE，系统代理写入尚未适配 kwriteconfig5/6".to_string()
+        } else {
+            format!(
+                "桌面环境: {}",
+                desktop.unwrap_or_else(|| "未知".to_string())
+            )
+        }],
     }
 }
 
@@ -115,14 +119,24 @@ pub fn enable_manual(profile: &ProxyProfile, unified: &UnifiedLists) -> Result<(
             "port",
             &profile.port.to_string(),
         ])?;
-        let mut ignore_hosts = profile.bypass_list.clone();
+        let mut ignore_hosts = Vec::new();
         if unified.direct_enabled {
             for domain in &unified.direct_domains {
+                if unified.is_direct_rule_disabled(domain) {
+                    continue;
+                }
                 if !crate::models::rule_works_in_manual(domain) {
                     continue;
                 }
                 if !ignore_hosts.iter().any(|item| item == domain) {
                     ignore_hosts.push(domain.clone());
+                }
+            }
+        }
+        if profile.bypass_local {
+            for domain in ["localhost", "127.0.0.1"] {
+                if !ignore_hosts.iter().any(|item| item == domain) {
+                    ignore_hosts.push(domain.to_string());
                 }
             }
         }

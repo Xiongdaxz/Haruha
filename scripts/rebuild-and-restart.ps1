@@ -5,9 +5,9 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BuildTargetDir = Join-Path $ProjectRoot ".restart-build"
-$BuiltExe = Join-Path $BuildTargetDir "release\proxy-manager-next.exe"
+$BuiltExe = Join-Path $BuildTargetDir "release\Haruha.exe"
 $RuntimeDir = Join-Path $ProjectRoot ".restart-runtime"
-$RuntimeExe = Join-Path $RuntimeDir "proxy-manager-next.exe"
+$RuntimeExe = Join-Path $RuntimeDir "Haruha.exe"
 $BuildScript = Join-Path $PSScriptRoot "build-windows-release.ps1"
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
 

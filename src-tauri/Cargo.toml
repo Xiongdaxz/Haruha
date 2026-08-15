@@ -1,11 +1,15 @@
 [package]
 name = "proxy-manager-next"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cross-platform system proxy manager"
 authors = ["xiaozhuerp"]
 edition = "2021"
 license = "MIT"
 publish = false
+
+[[bin]]
+name = "Haruha"
+path = "src/main.rs"
 
 [lib]
 name = "proxy_manager_next_lib"
@@ -23,9 +27,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
 tiny_http = "0.12"
-tokio = { version = "1", features = ["io-util", "net", "rt", "time"] }
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
 urlencoding = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinInet", "Win32_UI_WindowsAndMessaging"] }
+ferrisetw = "1.2"
+windows-icons = "0.4"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinInet", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 winreg = "0.55"

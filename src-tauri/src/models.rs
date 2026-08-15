@@ -16,18 +16,34 @@ pub enum ProxyMode {
 pub struct UnifiedLists {
     pub direct_enabled: bool,
     pub direct_domains: Vec<String>,
+    #[serde(default)]
+    pub disabled_direct_domains: Vec<String>,
     pub proxy_enabled: bool,
     pub proxy_domains: Vec<String>,
+    #[serde(default)]
+    pub disabled_proxy_domains: Vec<String>,
 }
 
 impl Default for UnifiedLists {
     fn default() -> Self {
         Self {
             direct_enabled: false,
-            direct_domains: default_bypass_list(),
+            direct_domains: default_direct_domains(),
+            disabled_direct_domains: Vec::new(),
             proxy_enabled: false,
-            proxy_domains: default_pac_rules().into_iter().map(|r| r.domain).collect(),
+            proxy_domains: default_proxy_domains(),
+            disabled_proxy_domains: Vec::new(),
         }
+    }
+}
+
+impl UnifiedLists {
+    pub fn is_direct_rule_disabled(&self, rule: &str) -> bool {
+        rule_list_contains(&self.disabled_direct_domains, rule)
+    }
+
+    pub fn is_proxy_rule_disabled(&self, rule: &str) -> bool {
+        rule_list_contains(&self.disabled_proxy_domains, rule)
     }
 }
 
@@ -67,6 +83,23 @@ pub fn classify_rule(rule: &str) -> RuleKind {
         return RuleKind::Cidr;
     }
     RuleKind::Domain
+}
+
+/// 统一规则用于去重、停用状态关联和跨列表移动的稳定键。
+pub fn unified_rule_key(rule: &str) -> String {
+    let trimmed = rule.trim();
+    match classify_rule(trimmed) {
+        RuleKind::Domain => normalize_domain_rule(trimmed),
+        RuleKind::Cidr | RuleKind::Glob => trimmed.to_ascii_lowercase(),
+    }
+}
+
+pub fn rule_list_contains(rules: &[String], candidate: &str) -> bool {
+    let candidate_key = unified_rule_key(candidate);
+    !candidate_key.is_empty()
+        && rules
+            .iter()
+            .any(|rule| unified_rule_key(rule) == candidate_key)
 }
 
 /// 判断规则在 Manual 模式（系统 bypass / ignore-hosts）下是否生效。
@@ -131,6 +164,8 @@ impl Default for ProxyMode {
     }
 }
 
+/// 旧版 PAC 规则的代理/直连策略。仅用于读取旧配置并迁移到统一名，
+/// 不再参与运行时逻辑。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PacStrategy {
@@ -138,6 +173,7 @@ pub enum PacStrategy {
     Direct,
 }
 
+/// 旧版 PAC 规则条目。仅用于读取旧配置并迁移到统一名单。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PacRule {
@@ -157,11 +193,17 @@ pub struct ProxyProfile {
     pub port: u16,
     #[serde(default = "default_bypass_local")]
     pub bypass_local: bool,
+    /// 旧版“不走代理”列表，已并入统一直连名单；保存时为空则省略，仅用于迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_list: Vec<String>,
+    /// 旧版 PAC 规则，已并入统一名单；保存时为空则省略，仅用于迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pac_rules: Vec<PacRule>,
-    #[serde(default)]
+    /// 旧版“删除的内置直连域名”，已并入统一名单；仅用于迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_builtin_direct_domains: Vec<String>,
-    #[serde(default)]
+    /// 旧版“停用的内置直连域名”，已并入统一名单；仅用于迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_builtin_direct_domains: Vec<String>,
     pub mode: ProxyMode,
 }
@@ -230,6 +272,16 @@ pub struct SpeedTestResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedTestProgress {
+    pub target: String,
+    pub latency_ms: u128,
+    pub download_mbps: f64,
+    pub downloaded_bytes: u64,
+    pub elapsed_ms: u128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkTrafficSample {
@@ -238,22 +290,53 @@ pub struct NetworkTrafficSample {
     pub timestamp_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficMonitorCapability {
+    pub supported: bool,
+    pub requires_elevation: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficApplicationUsage {
+    pub id: String,
+    pub name: String,
+    pub process_count: u32,
+    pub download_bytes: u64,
+    pub upload_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficMonitorSnapshot {
+    pub status: String,
+    pub started_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+    pub applications: Vec<TrafficApplicationUsage>,
+    pub error: Option<String>,
+}
+
 pub fn default_profile() -> ProxyProfile {
     ProxyProfile {
         id: "default".to_string(),
         name: "默认代理".to_string(),
-        host: "127.0.0.1".to_string(),
-        port: 1080,
+        host: "192.168.0.6".to_string(),
+        port: 10808,
         bypass_local: true,
-        bypass_list: default_bypass_list(),
-        pac_rules: default_pac_rules(),
+        bypass_list: Vec::new(),
+        pac_rules: Vec::new(),
         removed_builtin_direct_domains: Vec::new(),
         disabled_builtin_direct_domains: Vec::new(),
-        mode: ProxyMode::Manual,
+        // 首次启动只预填代理地址，不应在用户确认前修改系统代理。
+        mode: ProxyMode::Off,
     }
 }
 
-pub fn default_pac_rules() -> Vec<PacRule> {
+/// 默认代理名单（仅 PAC 模式生效）。
+pub fn default_proxy_domains() -> Vec<String> {
     [
         "googleapis.com",
         "google.com",
@@ -360,56 +443,72 @@ pub fn default_pac_rules() -> Vec<PacRule> {
         "googledrive.com",
     ]
     .into_iter()
-    .map(|domain| pac_rule(domain, PacStrategy::Proxy, "默认代理"))
+    .map(ToOwned::to_owned)
     .collect()
 }
 
-pub fn starter_pac_rules() -> Vec<PacRule> {
-    vec![
-        pac_rule("google.com", PacStrategy::Proxy, "谷歌服务"),
-        pac_rule("github.com", PacStrategy::Proxy, "GitHub"),
-        pac_rule("openai.com", PacStrategy::Proxy, "OpenAI"),
-        pac_rule("youtube.com", PacStrategy::Proxy, "YouTube"),
-        pac_rule("x.com", PacStrategy::Direct, "X (Twitter)"),
+/// 默认直连名单：本机/内网段 + 常用国内直连域名。
+pub fn default_direct_domains() -> Vec<String> {
+    let mut domains = vec![
+        "127.0.0.1",
+        "localhost",
+        "10.*",
+        "172.16.*",
+        "172.17.*",
+        "172.18.*",
+        "172.19.*",
+        "172.20.*",
+        "172.21.*",
+        "172.22.*",
+        "172.23.*",
+        "172.24.*",
+        "172.25.*",
+        "172.26.*",
+        "172.27.*",
+        "172.28.*",
+        "172.29.*",
+        "172.30.*",
+        "172.31.*",
+        "192.168.*",
+        "169.254.*",
     ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect::<Vec<_>>();
+    domains.extend(default_chinese_direct_domains());
+    domains
 }
 
-pub fn default_bypass_list() -> Vec<String> {
-    vec![
-        "127.0.0.1".to_string(),
-        "localhost".to_string(),
-        "10.*".to_string(),
-        "172.16.*".to_string(),
-        "172.17.*".to_string(),
-        "172.18.*".to_string(),
-        "172.19.*".to_string(),
-        "172.20.*".to_string(),
-        "172.21.*".to_string(),
-        "172.22.*".to_string(),
-        "172.23.*".to_string(),
-        "172.24.*".to_string(),
-        "172.25.*".to_string(),
-        "172.26.*".to_string(),
-        "172.27.*".to_string(),
-        "172.28.*".to_string(),
-        "172.29.*".to_string(),
-        "172.30.*".to_string(),
-        "172.31.*".to_string(),
-        "192.168.*".to_string(),
-        "169.254.*".to_string(),
+/// 常用国内直连域名（默认直连名单的一部分）。
+pub fn default_chinese_direct_domains() -> Vec<String> {
+    [
+        ".cn",
+        ".com.cn",
+        ".net.cn",
+        ".org.cn",
+        "baidu.com",
+        "qq.com",
+        "163.com",
+        "126.com",
+        "taobao.com",
+        "tmall.com",
+        "jd.com",
+        "alipay.com",
+        "weibo.com",
+        "wechat.com",
+        "weixin.qq.com",
+        "bilibili.com",
+        "youku.com",
+        "iqiyi.com",
+        "aliyun.com",
+        "tencent.com",
+        "huawei.com",
     ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect()
 }
 
 fn default_bypass_local() -> bool {
     true
-}
-
-fn pac_rule(domain: &str, strategy: PacStrategy, note: &str) -> PacRule {
-    PacRule {
-        id: domain.to_string(),
-        domain: domain.to_string(),
-        strategy,
-        enabled: true,
-        note: Some(note.to_string()),
-    }
 }

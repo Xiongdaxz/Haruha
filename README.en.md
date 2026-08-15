@@ -27,8 +27,8 @@ Haruha is built with Tauri 2, React 19, and Rust. It configures operating-system
 - Manual proxy, PAC auto-proxy, and proxy-off modes
 - PAC proxy/direct rules and shared rule lists
 - Windows desktop tray with quick mode switching
-- Proxy connectivity, IP information, and download-speed tests
-- Aggregate network-interface traffic overview
+- Proxy connectivity, IP information, and proxied/direct download-speed tests
+- Windows live physical-interface traffic and per-application session totals (UAC required)
 - Local configuration, logs, and favicon cache
 - Read-only migration of legacy Windows configuration
 
@@ -57,7 +57,7 @@ bun install --frozen-lockfile
 bun run tauri:dev
 ```
 
-The first-run profile uses `127.0.0.1:1080` as a safe example. Replace it with your own proxy address in the UI.
+The first-run profile and Restore Defaults prefill `192.168.0.6:10808`, but first launch does not change the system proxy automatically. Confirm or replace the address before enabling it.
 
 ## 🛠️ Common commands
 
@@ -111,7 +111,7 @@ See the [release guide](docs/en/releasing.md) for the complete flow and asset li
 
 Haruha changes the current user's system proxy settings. It attempts to disable the proxy during a normal exit, but a forced termination or system crash may leave the last settings active. If networking fails, disable the proxy in the operating-system settings before filing an issue.
 
-The project contains no telemetry or analytics module. IP lookup, speed testing, and favicon features contact third-party services. See [Network and privacy boundaries](docs/en/architecture.md#network-and-privacy-boundaries).
+The project contains no telemetry or analytics module. Windows application totals accumulate only PID, direction, and byte count for the current monitoring session; they do not capture content, domains, IP addresses, ports, or history. IP lookup, speed testing, and favicon features contact third-party services. See [Network and privacy boundaries](docs/en/architecture.md#network-and-privacy-boundaries).
 
 ## 📄 License
 

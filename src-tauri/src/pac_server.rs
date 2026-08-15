@@ -75,6 +75,11 @@ impl PacServer {
         }
         self.port = None;
     }
+
+    #[cfg(windows)]
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
 }
 
 impl Drop for PacServer {

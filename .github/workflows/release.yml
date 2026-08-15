@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing draft release tag to normalize
         required: true
-        default: v0.1.0
+        default: v0.1.1
 
 permissions:
   contents: write
@@ -130,11 +130,11 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           if ("${{ matrix.name }}" -eq "Windows ARM64") {
-            $source = "src-tauri/target/aarch64-pc-windows-msvc/release/proxy-manager-next.exe"
+            $source = "src-tauri/target/aarch64-pc-windows-msvc/release/Haruha.exe"
             $assetName = "04-Haruha-" + $tag + "-Windows-ARM64-Portable.exe"
           }
           else {
-            $source = "src-tauri/target/release/proxy-manager-next.exe"
+            $source = "src-tauri/target/release/Haruha.exe"
             $assetName = "01-Haruha-" + $tag + "-Windows-x64-Portable.exe"
           }
           $destination = Join-Path $env:RUNNER_TEMP $assetName
@@ -152,12 +152,12 @@ jobs:
         include:
           - name: Windows x64
             rust_target: ""
-            executable_path: src-tauri/target/release/proxy-manager-next.exe
+            executable_path: src-tauri/target/release/Haruha.exe
             asset_order: "01"
             asset_arch: x64
           - name: Windows ARM64
             rust_target: aarch64-pc-windows-msvc
-            executable_path: src-tauri/target/aarch64-pc-windows-msvc/release/proxy-manager-next.exe
+            executable_path: src-tauri/target/aarch64-pc-windows-msvc/release/Haruha.exe
             asset_order: "04"
             asset_arch: ARM64
 

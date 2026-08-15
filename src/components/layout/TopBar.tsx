@@ -4,20 +4,23 @@ import { RollingText } from "../feedback/RollingText";
 
 interface TopBarProps {
   state: ProxyState;
+  pacUrl: string;
   isModePending: boolean;
   animateModeValues: boolean;
   onCopy: (value: string | undefined, label: string) => void;
   onModeChange: (mode: ProxyMode) => void;
 }
 
-export function TopBar({ state, isModePending, animateModeValues, onCopy, onModeChange }: TopBarProps) {
+export function TopBar({ state, pacUrl, isModePending, animateModeValues, onCopy, onModeChange }: TopBarProps) {
   function requestModeChange(mode: ProxyMode) {
     if (mode === state.mode) return;
     onModeChange(mode);
   }
 
   const rollingOrder = modeOrder[state.mode];
-  const address = state.address ?? "未设置代理地址";
+  const connectionValue = state.mode === "pac" ? pacUrl : state.address;
+  const connectionLabel = state.mode === "pac" ? "PAC地址" : "代理地址";
+  const connectionFallback = state.mode === "pac" ? "未设置PAC地址" : "未设置代理地址";
 
   return (
     <header className="window-bar">
@@ -38,8 +41,12 @@ export function TopBar({ state, isModePending, animateModeValues, onCopy, onMode
           />
         </div>
         <div className="divider" />
-        <button className="address-pill copy-button" onClick={() => onCopy(state.address, "代理地址")} title="复制代理地址">
-          <RollingText animate={animateModeValues} order={rollingOrder} value={address} />
+        <button
+          className="address-pill copy-button"
+          onClick={() => onCopy(connectionValue, connectionLabel)}
+          title={`复制${connectionLabel}`}
+        >
+          <RollingText animate={animateModeValues} order={rollingOrder} value={connectionValue ?? connectionFallback} />
         </button>
         <div className="divider" />
         <div className="connection-pill">
