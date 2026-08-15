@@ -10,10 +10,16 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { ProxyIcon } from "../app/constants";
+import { SortableColumnButton } from "../components/data/SortableColumnButton";
+import { ConfirmDialog } from "../components/feedback/ConfirmDialog";
+import { RuleAddDialog } from "../components/feedback/RuleAddDialog";
+import { ruleTypeLabel } from "../lib/format";
+import { normalizeUnifiedRuleInput, unifiedRuleAddOptions } from "../lib/rules";
+import type { UnifiedRuleAddOptions } from "../lib/rules";
 import type { PacRule } from "../lib/types";
-import type { PacRuleTab } from "../app/types";
+import type { PacRuleTab, RuleListSortField, RuleListSortState } from "../app/types";
 
 interface PacPageProps {
   activePacTab: PacRuleTab;
@@ -26,11 +32,15 @@ interface PacPageProps {
   proxyRuleCount: number;
   directRuleCount: number;
   disabledRuleCount: number;
+  listEnabled: boolean;
+  sortState: RuleListSortState | null;
   onPacTabChange: (tab: PacRuleTab) => void;
   onQueryChange: (value: string) => void;
-  onAddRule: () => void;
+  onAddRule: (ruleInput?: string) => void;
   onDeleteSelectedRules: () => void;
   onResetRules: () => void;
+  onSortRules: (field: RuleListSortField) => void;
+  onActivatePausedRule: (ruleId: string) => void;
   onToggleAllFilteredRules: () => void;
   onToggleRuleSelected: (ruleId: string) => void;
   onUpdateRule: (ruleId: string, updater: (rule: PacRule) => PacRule, logMessage: string) => void;
@@ -49,11 +59,15 @@ export function PacPage({
   proxyRuleCount,
   directRuleCount,
   disabledRuleCount,
+  listEnabled,
+  sortState,
   onPacTabChange,
   onQueryChange,
   onAddRule,
   onDeleteSelectedRules,
   onResetRules,
+  onSortRules,
+  onActivatePausedRule,
   onToggleAllFilteredRules,
   onToggleRuleSelected,
   onUpdateRule,
@@ -61,12 +75,47 @@ export function PacPage({
   onCopy,
 }: PacPageProps) {
   const queryInputRef = useRef<HTMLInputElement>(null);
+  const [pendingStrategyRule, setPendingStrategyRule] = useState<PacRule | null>(null);
+  const [pendingDeleteRule, setPendingDeleteRule] = useState<PacRule | null>(null);
+  const [pendingAddOptions, setPendingAddOptions] = useState<UnifiedRuleAddOptions | null>(null);
+  const [isDeleteSelectedConfirmOpen, setDeleteSelectedConfirmOpen] = useState(false);
 
   function handleAddRule() {
-    if (!query.trim()) {
+    const normalized = normalizeUnifiedRuleInput(query);
+    if (!normalized) {
       queryInputRef.current?.focus();
+      onAddRule(normalized);
+      return;
     }
-    onAddRule();
+    onQueryChange(normalized);
+    const options = unifiedRuleAddOptions(normalized);
+    if (options) {
+      setPendingAddOptions(options);
+      return;
+    }
+    onAddRule(normalized);
+  }
+
+  function confirmStrategyChange() {
+    if (!pendingStrategyRule) return;
+    const nextStrategy = pendingStrategyRule.strategy === "proxy" ? "direct" : "proxy";
+    onUpdateRule(
+      pendingStrategyRule.id,
+      (current) => ({ ...current, strategy: nextStrategy }),
+      `${pendingStrategyRule.domain} 策略已切换`,
+    );
+    setPendingStrategyRule(null);
+  }
+
+  function confirmRuleDelete() {
+    if (!pendingDeleteRule) return;
+    onDeleteRule(pendingDeleteRule.id);
+    setPendingDeleteRule(null);
+  }
+
+  function confirmSelectedRulesDelete() {
+    onDeleteSelectedRules();
+    setDeleteSelectedConfirmOpen(false);
   }
 
   return (
@@ -100,6 +149,14 @@ export function PacPage({
                 ref={queryInputRef}
                 value={query}
                 onChange={(event) => onQueryChange(event.target.value)}
+                onPaste={(event) => {
+                  const pasted = event.clipboardData.getData("text");
+                  const normalized = normalizeUnifiedRuleInput(pasted);
+                  if (normalized && normalized !== pasted.trim().toLowerCase()) {
+                    event.preventDefault();
+                    onQueryChange(normalized);
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     handleAddRule();
@@ -111,7 +168,12 @@ export function PacPage({
               <Plus size={18} />
               添加
             </button>
-            <button className="outline danger compact" onClick={onDeleteSelectedRules}>
+            <button
+              className="outline danger compact"
+              disabled={selectedVisibleRuleCount === 0}
+              onClick={() => setDeleteSelectedConfirmOpen(true)}
+              type="button"
+            >
               <Trash2 size={18} />
               删除
             </button>
@@ -124,88 +186,86 @@ export function PacPage({
               aria-label="选择当前列表全部规则"
               checked={allFilteredSelected}
               className="rule-check"
-              disabled={!filteredRules.some((rule) => !rule.readonly || rule.source === "builtin")}
+              disabled={filteredRules.length === 0}
               onChange={onToggleAllFilteredRules}
               type="checkbox"
             />
-            <span>域名</span>
-            <span>策略</span>
-            <span>状态</span>
-            <span>备注</span>
+            <SortableColumnButton field="domain" label="域名" onSort={onSortRules} sortState={sortState} />
+            <SortableColumnButton field="strategy" label="策略" onSort={onSortRules} sortState={sortState} />
+            <SortableColumnButton field="type" label="类型" onSort={onSortRules} sortState={sortState} />
+            <SortableColumnButton field="status" label="状态" onSort={onSortRules} sortState={sortState} />
             <span>操作</span>
           </div>
-          {filteredRules.map((rule) => (
+          {filteredRules.map((rule) => {
+            const effectiveRuleEnabled = listEnabled && rule.enabled;
+            return (
             <div className="table-row" key={rule.id}>
               <input
                 aria-label={`选择 ${rule.domain}`}
                 checked={selectedRuleIds.has(rule.id)}
                 className="rule-check"
-                disabled={rule.readonly && rule.source !== "builtin"}
                 onChange={() => onToggleRuleSelected(rule.id)}
                 type="checkbox"
               />
               <strong>{rule.domain}</strong>
               <button
-                className={`tag strategy-tag${rule.strategy === "direct" ? " direct" : ""}${
-                  rule.readonly ? " locked" : ""
-                }`}
-                disabled={rule.readonly}
-                title={rule.readonly ? "内置规则策略固定为直连" : "切换代理策略"}
-                onClick={() =>
-                  onUpdateRule(
-                    rule.id,
-                    (current) => ({
-                      ...current,
-                      strategy: current.strategy === "proxy" ? "direct" : "proxy",
-                    }),
-                    `${rule.domain} 策略已切换`,
-                  )
-                }
+                className={`tag strategy-tag${rule.strategy === "direct" ? " direct" : ""}`}
+                onClick={() => setPendingStrategyRule(rule)}
+                title="确认后切换代理策略"
+                type="button"
               >
                 {rule.strategy === "proxy" ? "代理" : "直连"}
               </button>
+              <span className="tag green">{ruleTypeLabel(rule.domain)}</span>
               <button
-                className={rule.enabled ? "state-cell rule-state" : "state-cell rule-state muted"}
-                disabled={rule.readonly && rule.source !== "builtin"}
-                title={
-                  rule.source === "builtin"
-                    ? "切换内置规则状态（可通过恢复默认重置）"
-                    : rule.readonly
-                      ? "此规则状态不可修改"
-                      : "切换规则状态"
+                className={
+                  !listEnabled
+                    ? "state-cell rule-state paused"
+                    : effectiveRuleEnabled
+                      ? "state-cell rule-state"
+                      : "state-cell rule-state muted"
                 }
                 onClick={() =>
-                  onUpdateRule(
-                    rule.id,
-                    (current) => ({ ...current, enabled: !current.enabled }),
-                    `${rule.domain} 已${rule.enabled ? "停用" : "启用"}`,
-                  )
+                  listEnabled
+                    ? onUpdateRule(
+                        rule.id,
+                        (current) => ({ ...current, enabled: !current.enabled }),
+                        `${rule.domain} 已${rule.enabled ? "停用" : "启用"}`,
+                      )
+                    : onActivatePausedRule(rule.id)
                 }
+                title={
+                  listEnabled
+                    ? "切换规则状态"
+                    : `启用此规则并开启${activePacTab === "proxy" ? "代理名单" : "直连名单"}总开关`
+                }
+                type="button"
               >
                 <i />
-                {rule.enabled ? "生效" : "停用"}
+                {!listEnabled ? "停用" : rule.enabled ? "生效" : "停用"}
               </button>
-              <span>{rule.note}</span>
-              {rule.readonly && rule.source !== "builtin" ? (
-                <button className="row-action danger disabled" disabled title="不可删除">
-                  <Trash2 size={16} />
-                </button>
-              ) : (
-                <button
-                  className="row-action danger"
-                  onClick={() => onDeleteRule(rule.id)}
-                  title={rule.source === "builtin" ? "删除内置规则（可通过恢复默认找回）" : "删除规则"}
-                >
-                  <Trash2 size={16} />
-                </button>
-              )}
+              <button
+                className="row-action danger"
+                onClick={() => setPendingDeleteRule(rule)}
+                title="删除规则"
+                type="button"
+              >
+                <Trash2 size={16} />
+              </button>
             </div>
-          ))}
+            );
+          })}
+          {filteredRules.length === 0 ? (
+            <div className="table-row empty">
+              <span>{query.trim() ? "无匹配域名" : "暂无域名，在上方输入并添加"}</span>
+            </div>
+          ) : null}
         </div>
 
         <div className="table-footer">
           <span>
-            共 {filteredRules.length} 条{selectedVisibleRuleCount > 0 ? `，已选 ${selectedVisibleRuleCount} 条` : ""}
+            共 {filteredRules.length} 条
+            {selectedVisibleRuleCount > 0 ? `，已选 ${selectedVisibleRuleCount} 条` : ""}
           </span>
           <div className="pager">
             <button>
@@ -269,10 +329,55 @@ export function PacPage({
           </div>
           <div className="pac-hint">
             <ShieldCheck size={16} />
-            <span>右侧切换代理或直连规则，PAC会按规则集生成。</span>
+            <span>每条规则都可独立切换策略与状态，修改会同步到统一名单。</span>
           </div>
         </section>
       </aside>
+
+      <ConfirmDialog
+        confirmLabel={`切换为${pendingStrategyRule?.strategy === "proxy" ? "直连" : "代理"}`}
+        description={
+          pendingStrategyRule
+            ? `确定将 ${pendingStrategyRule.domain} 从${pendingStrategyRule.strategy === "proxy" ? "代理" : "直连"}切换为${pendingStrategyRule.strategy === "proxy" ? "直连" : "代理"}？确认后会同步移动到对应统一名单。`
+            : ""
+        }
+        icon="switch"
+        isOpen={pendingStrategyRule !== null}
+        onCancel={() => setPendingStrategyRule(null)}
+        onConfirm={confirmStrategyChange}
+        title="确认切换策略"
+      />
+      <ConfirmDialog
+        confirmLabel="确认删除"
+        description={
+          pendingDeleteRule
+            ? `确定删除 ${pendingDeleteRule.domain}？删除后会从对应统一名单中移除。`
+            : ""
+        }
+        icon="delete"
+        isOpen={pendingDeleteRule !== null}
+        onCancel={() => setPendingDeleteRule(null)}
+        onConfirm={confirmRuleDelete}
+        title="删除 PAC 规则？"
+      />
+      <ConfirmDialog
+        confirmLabel="确认删除"
+        description={`确定删除已选择的 ${selectedVisibleRuleCount} 条 PAC 规则？此操作会同步更新统一名单。`}
+        icon="delete"
+        isOpen={isDeleteSelectedConfirmOpen}
+        onCancel={() => setDeleteSelectedConfirmOpen(false)}
+        onConfirm={confirmSelectedRulesDelete}
+        title="批量删除 PAC 规则？"
+      />
+      <RuleAddDialog
+        listLabel={activePacTab === "proxy" ? "代理名单" : "直连名单"}
+        onCancel={() => setPendingAddOptions(null)}
+        onConfirm={(rule) => {
+          setPendingAddOptions(null);
+          onAddRule(rule);
+        }}
+        options={pendingAddOptions}
+      />
     </>
   );
 }

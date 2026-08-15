@@ -57,7 +57,7 @@ bun run tauri:build:windows -- -Proxy http://127.0.0.1:7890
 典型输出：
 
 ```text
-src-tauri/target/release/proxy-manager-next.exe
+src-tauri/target/release/Haruha.exe
 src-tauri/target/release/bundle/msi/*.msi
 ```
 
@@ -68,7 +68,7 @@ src-tauri/target/release/bundle/msi/*.msi
 在一台没有开发源码的 Windows 机器或干净虚拟机安装并运行。确认卸载、升级、托盘、代理恢复和中文安装界面。记录文件名、字节数和 SHA-256：
 
 ```powershell
-Get-FileHash .\src-tauri\target\release\proxy-manager-next.exe -Algorithm SHA256
+Get-FileHash .\src-tauri\target\release\Haruha.exe -Algorithm SHA256
 Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
   Get-FileHash -Algorithm SHA256
 ```
@@ -90,7 +90,7 @@ git push origin v0.1.0
 ```powershell
 gh release create v0.1.0 --draft --verify-tag `
   --title "Haruha v0.1.0" `
-  .\src-tauri\target\release\proxy-manager-next.exe `
+  .\src-tauri\target\release\Haruha.exe `
   .\src-tauri\target\release\bundle\msi\*.msi `
   .\SHA256SUMS.txt
 ```

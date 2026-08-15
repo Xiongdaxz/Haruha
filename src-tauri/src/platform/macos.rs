@@ -77,14 +77,24 @@ pub fn read_state() -> ProxyState {
 }
 
 pub fn enable_manual(profile: &ProxyProfile, unified: &UnifiedLists) -> Result<()> {
-    let mut bypass_domains = profile.bypass_list.clone();
+    let mut bypass_domains = Vec::new();
     if unified.direct_enabled {
         for domain in &unified.direct_domains {
+            if unified.is_direct_rule_disabled(domain) {
+                continue;
+            }
             if !crate::models::rule_works_in_manual(domain) {
                 continue;
             }
             if !bypass_domains.iter().any(|item| item == domain) {
                 bypass_domains.push(domain.clone());
+            }
+        }
+    }
+    if profile.bypass_local {
+        for domain in ["localhost", "127.0.0.1"] {
+            if !bypass_domains.iter().any(|item| item == domain) {
+                bypass_domains.push(domain.to_string());
             }
         }
     }
@@ -107,8 +117,11 @@ pub fn enable_manual(profile: &ProxyProfile, unified: &UnifiedLists) -> Result<(
             &profile.host,
             &profile.port.to_string(),
         ])?;
-        if !bypass_args.is_empty() {
+        {
             let mut args = vec!["-setproxybypassdomains".to_string(), service.clone()];
+            if bypass_args.is_empty() {
+                args.push("Empty".to_string());
+            }
             args.extend(bypass_args.iter().cloned());
             let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             run_networksetup(&args_ref)?;

@@ -49,6 +49,7 @@ flowchart LR
 | `src-tauri/src/pac.rs` | PAC rule normalization, deduplication, and script generation |
 | `src-tauri/src/pac_server.rs` | Loopback-only PAC HTTP server |
 | `src-tauri/src/net.rs` | Proxy test, IP lookup, and download-speed test |
+| `src-tauri/src/traffic_monitor.rs` | Elevated Windows ETW collection, session totals, and application icon reads |
 | `src-tauri/src/platform/` | Operating-system proxy state adapters |
 | `src-tauri/capabilities/` | Tauri window permission boundary |
 | `scripts/` | Environment check, optional Cargo proxy wrapper, and Windows release helpers |
@@ -85,7 +86,8 @@ Tauri commands are grouped by responsibility:
 
 - Configuration: `get_active_profile`, `save_profile`, `get_unified_lists`, `save_unified_lists`
 - Modes: `get_proxy_state`, `enable_manual`, `enable_pac`, `disable_proxy`
-- Network: `test_proxy`, `refresh_ip_info`, `run_proxy_speed_test`, `get_network_traffic_sample`
+- Network: `test_proxy`, `refresh_ip_info`, `run_proxy_speed_test`, `run_direct_speed_test`, `get_network_traffic_sample`
+- Application traffic: `get_traffic_monitor_capability`, `start_traffic_monitor`, `get_traffic_monitor_snapshot`, `stop_traffic_monitor`, `get_traffic_application_icon`
 - Local capabilities: log append, configuration directory, quick-site favicons, and restricted external URL opening
 - Window/tray: show the main window, hide the tray panel, and exit
 
@@ -130,9 +132,15 @@ sequenceDiagram
 
 The preferred port is `18765`; if occupied, the server chooses an available loopback port. On restore, a saved PAC mode recreates the server and writes the new dynamic URL.
 
+### Traffic monitoring
+
+On Windows, the system-interface chart and per-application totals are separate data paths. The chart samples cumulative counters for active physical interfaces once per second, excludes virtual and loopback adapters, and keeps only the latest 60 points in memory. The first application-monitoring start in each Haruha process launches a separate elevated helper mode of the same executable through UAC. That helper consumes ETW TCP/UDP events for IPv4 and IPv6 and sends one cumulative snapshot every five seconds over a local-only randomized named pipe.
+
+The helper accumulates only PID, direction, and byte count, then merges processes by executable. Loopback traffic is excluded and `System/Unknown` remains an explicit item. The application shell owns the session, so view changes and hiding to the tray do not interrupt it. Disabling monitoring stops ETW and clears the current totals while retaining an idle helper that collects no data. Re-enabling monitoring in the same Haruha process reuses that helper without another UAC prompt and starts at zero; explicitly exiting Haruha shuts the helper down. UAC cancellation, pipe timeout, or ETW failure produces an explicit error without estimated fallback data and does not stop the system-interface chart. Capability queries report per-application breakdown as unsupported on macOS and Linux.
+
 ### Disable and exit
 
-Disable first turns off the operating-system proxy, then stops the PAC server and persists `mode=off`. Closing the main window normally hides it to the tray. An explicit exit attempts to disable the system proxy first. A force-killed process cannot guarantee cleanup.
+Disable first turns off the operating-system proxy, then stops the PAC server and persists `mode=off`. Closing the main window normally hides it to the tray. An explicit exit stops application-traffic collection and attempts to disable the system proxy first. A force-killed process cannot guarantee cleanup.
 
 ## 8. Platform adapters
 
@@ -144,15 +152,16 @@ See [Platform support](platform-support.md) for the capability and validation ma
 
 ## 9. Network and privacy boundaries
 
-In addition to the configured proxy, current network features may contact Google connectivity checks, several public IP-information services, Cloudflare's default speed-test URL, Google/DuckDuckGo/target-site favicon endpoints, and quick sites explicitly opened by the user. Those services may observe the request IP, User-Agent, and requested domain.
+In addition to the configured proxy, current network features may contact Google connectivity checks, several public IP-information services, Cloudflare's default proxied speed-test URL, the Tencent Cloud mirror used by the default direct speed test, Google/DuckDuckGo/target-site favicon endpoints, and quick sites explicitly opened by the user. Those services may observe the request IP, User-Agent, and requested domain.
 
-Haruha has no telemetry or analytics module. The traffic overview reads aggregate byte counters for all system interfaces. It does not capture packets or content and does not represent proxy-only traffic.
+Haruha has no telemetry or analytics module. The system overview reads aggregate byte counters for active physical interfaces, excludes virtual and loopback adapters, and does not represent proxy-only traffic. Accurate Windows application totals require continuously consuming ETW network events in the background; the collector accumulates only PID, direction, and byte count and resolves application names/icons locally. Source and destination addresses are inspected transiently inside the event callback only to reject loopback traffic, then discarded. Network content, domains, IP addresses, ports, per-second history, and per-application live rates are never returned or retained. Application totals exist only in memory and are cleared when monitoring stops or the app exits.
 
 ## 10. Security model
 
 - The PAC server binds to `127.0.0.1`, never a LAN address.
 - The external-open command accepts only `http://` and `https://` URLs.
 - Tauri capabilities grant the main and tray windows only the required core/window permissions.
+- Windows application-traffic collection requires explicit UAC confirmation on its first start in each Haruha process. Disabling monitoring leaves the elevated helper idle without an active ETW session, and explicitly exiting the app destroys it. The main process and helper authenticate over a randomized named pipe with a session token plus collection run ID and reject remote pipe clients.
 - Configuration is stored in the current user's directory; configuration and logs must never be committed.
 - Platform adapters are the highest-risk boundary. Every write must return a concrete failure and must never claim success without evidence.
 - Automatic updates and signature verification are not currently implemented. Public installers should be signed and accompanied by SHA-256 checksums.

@@ -4,21 +4,36 @@ import type {
   AppLogLevel,
   IpInfo,
   NetworkTrafficSample,
-  PacRule,
+  ProxyMode,
   ProxyProfile,
   ProxyState,
+  SavedConfiguration,
   SpeedTestConfig,
+  SpeedTestProgress,
   SpeedTestResult,
+  SpeedTestTarget,
   TestResult,
+  TrafficMonitorCapability,
+  TrafficMonitorSnapshot,
   UnifiedLists,
 } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
+const mockTrafficApplicationLimit = (() => {
+  if (isTauri) return undefined;
+  const rawLimit = new URLSearchParams(window.location.search).get("mockTrafficApplications");
+  if (rawLimit === null) return undefined;
+  const parsed = Number(rawLimit);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+})();
+const mockTrafficRankingShift =
+  !isTauri && new URLSearchParams(window.location.search).get("mockTrafficRanking") === "shift";
 let mockTrafficReceivedBytes = 8 * 1024 * 1024 * 1024;
 let mockTrafficSentBytes = 2 * 1024 * 1024 * 1024;
 let mockTrafficUpdatedAt = Date.now();
+let mockTrafficMonitorStartedAt: number | null = null;
 
-export const defaultRules: PacRule[] = [
+export const defaultProxyDomains: string[] = [
   "googleapis.com",
   "google.com",
   "googleusercontent.com",
@@ -122,54 +137,75 @@ export const defaultRules: PacRule[] = [
   "youtubekids.com",
   "youtube-nocookie.com",
   "googledrive.com",
-].map((domain) => ({ id: domain, domain, strategy: "proxy", enabled: true, note: "默认代理" }));
+];
+
+export const defaultDirectDomains: string[] = [
+  "127.0.0.1",
+  "localhost",
+  "10.*",
+  "172.16.*",
+  "172.17.*",
+  "172.18.*",
+  "172.19.*",
+  "172.20.*",
+  "172.21.*",
+  "172.22.*",
+  "172.23.*",
+  "172.24.*",
+  "172.25.*",
+  "172.26.*",
+  "172.27.*",
+  "172.28.*",
+  "172.29.*",
+  "172.30.*",
+  "172.31.*",
+  "192.168.*",
+  "169.254.*",
+  ".cn",
+  ".com.cn",
+  ".net.cn",
+  ".org.cn",
+  "baidu.com",
+  "qq.com",
+  "163.com",
+  "126.com",
+  "taobao.com",
+  "tmall.com",
+  "jd.com",
+  "alipay.com",
+  "weibo.com",
+  "wechat.com",
+  "weixin.qq.com",
+  "bilibili.com",
+  "youku.com",
+  "iqiyi.com",
+  "aliyun.com",
+  "tencent.com",
+  "huawei.com",
+];
 
 export const defaultProfile: ProxyProfile = {
   id: "default",
   name: "默认代理",
-  host: "127.0.0.1",
-  port: 1080,
+  host: "192.168.0.6",
+  port: 10808,
   bypassLocal: true,
-  bypassList: [
-    "127.0.0.1",
-    "localhost",
-    "10.*",
-    "172.16.*",
-    "172.17.*",
-    "172.18.*",
-    "172.19.*",
-    "172.20.*",
-    "172.21.*",
-    "172.22.*",
-    "172.23.*",
-    "172.24.*",
-    "172.25.*",
-    "172.26.*",
-    "172.27.*",
-    "172.28.*",
-    "172.29.*",
-    "172.30.*",
-    "172.31.*",
-    "192.168.*",
-    "169.254.*",
-  ],
-  pacRules: defaultRules,
-  removedBuiltinDirectDomains: [],
-  disabledBuiltinDirectDomains: [],
-  mode: "manual",
+  mode: "off",
 };
 
 export const defaultUnifiedLists: UnifiedLists = {
   directEnabled: false,
-  directDomains: defaultProfile.bypassList.slice(),
+  directDomains: defaultDirectDomains.slice(),
+  disabledDirectDomains: [],
   proxyEnabled: false,
-  proxyDomains: defaultRules.map((r) => r.domain),
+  proxyDomains: defaultProxyDomains.slice(),
+  disabledProxyDomains: [],
 };
 
 export const mockState: ProxyState = {
-  mode: "manual",
-  address: "127.0.0.1:1080",
-  pacUrl: "http://127.0.0.1:18765/proxy.pac",
+  mode: "off",
+  address: undefined,
+  pacUrl: undefined,
   platform: "Windows / macOS / Linux",
   capabilities: {
     manualProxy: true,
@@ -183,8 +219,9 @@ export const mockState: ProxyState = {
 };
 
 export const defaultSpeedTestConfig: SpeedTestConfig = {
-  downloadUrl: "https://speed.cloudflare.com/__down?bytes=1048576",
-  downloadBytesLimit: 1_048_576,
+  downloadUrl: "https://speed.cloudflare.com/__down?bytes=10485760",
+  directDownloadUrl: "https://mirrors.cloud.tencent.com/ubuntu/ls-lR.gz",
+  downloadBytesLimit: 10_485_760,
 };
 
 export async function getProxyState(): Promise<ProxyState> {
@@ -222,7 +259,9 @@ export async function getUnifiedLists(): Promise<UnifiedLists> {
     return {
       ...defaultUnifiedLists,
       directDomains: [...defaultUnifiedLists.directDomains],
+      disabledDirectDomains: [...defaultUnifiedLists.disabledDirectDomains],
       proxyDomains: [...defaultUnifiedLists.proxyDomains],
+      disabledProxyDomains: [...defaultUnifiedLists.disabledProxyDomains],
     };
   }
   return invoke<UnifiedLists>("get_unified_lists");
@@ -231,6 +270,25 @@ export async function getUnifiedLists(): Promise<UnifiedLists> {
 export async function saveUnifiedLists(lists: UnifiedLists): Promise<UnifiedLists> {
   if (!isTauri) return lists;
   return invoke<UnifiedLists>("save_unified_lists", { lists });
+}
+
+export async function saveConfiguration(
+  profile: ProxyProfile,
+  lists: UnifiedLists,
+): Promise<SavedConfiguration> {
+  if (!isTauri) {
+    return {
+      profile,
+      unifiedLists: lists,
+      proxyState: {
+        ...mockState,
+        mode: profile.mode,
+        address: profile.mode === "manual" ? `${profile.host}:${profile.port}` : undefined,
+        pacUrl: profile.mode === "pac" ? "http://127.0.0.1:18765/proxy.pac" : undefined,
+      },
+    };
+  }
+  return invoke<SavedConfiguration>("save_configuration", { profile, lists });
 }
 
 export async function enableManual(profile: ProxyProfile): Promise<ProxyState> {
@@ -246,6 +304,18 @@ export async function enablePac(profile: ProxyProfile): Promise<ProxyState> {
 export async function disableProxy(): Promise<ProxyState> {
   if (!isTauri) return { ...mockState, mode: "off", address: undefined, pacUrl: undefined };
   return invoke<ProxyState>("disable_proxy");
+}
+
+export async function setProxyMode(mode: ProxyMode): Promise<ProxyState> {
+  if (!isTauri) {
+    return {
+      ...mockState,
+      mode,
+      address: mode === "manual" ? `${defaultProfile.host}:${defaultProfile.port}` : undefined,
+      pacUrl: mode === "pac" ? "http://127.0.0.1:18765/proxy.pac" : undefined,
+    };
+  }
+  return invoke<ProxyState>("set_proxy_mode", { mode });
 }
 
 export async function testProxy(profile: ProxyProfile): Promise<TestResult> {
@@ -303,19 +373,49 @@ export async function quitFromTray(): Promise<void> {
   return invoke<void>("quit_from_tray");
 }
 
-export async function runProxySpeedTest(profile: ProxyProfile, config: SpeedTestConfig): Promise<SpeedTestResult> {
+export async function runNetworkSpeedTest(
+  profile: ProxyProfile,
+  config: SpeedTestConfig,
+  target: SpeedTestTarget,
+  onProgress?: (progress: SpeedTestProgress) => void,
+): Promise<SpeedTestResult> {
+  const requestConfig = {
+    downloadUrl: target === "proxy" ? config.downloadUrl : config.directDownloadUrl,
+    downloadBytesLimit: config.downloadBytesLimit,
+  };
   if (!isTauri) {
-    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    const finalMbps = target === "proxy" ? 37.8 : 82.6;
+    const latencyMs = target === "proxy" ? 42 : 24;
+    const startedAt = performance.now();
+    for (const ratio of [0.08, 0.2, 0.38, 0.58, 0.76, 0.9, 1]) {
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      onProgress?.({
+        target,
+        latencyMs,
+        downloadMbps: finalMbps * ratio,
+        downloadedBytes: Math.round(requestConfig.downloadBytesLimit * ratio),
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    }
     return {
       ok: true,
-      latencyMs: 42,
-      downloadMbps: 37.8,
-      downloadedBytes: config.downloadBytesLimit,
-      durationMs: 940,
+      latencyMs,
+      downloadMbps: finalMbps,
+      downloadedBytes: requestConfig.downloadBytesLimit,
+      durationMs: Math.round(performance.now() - startedAt),
       message: "",
     };
   }
-  return invoke<SpeedTestResult>("run_proxy_speed_test", { profile, config });
+  const unlisten = await listen<SpeedTestProgress>("speed-test-progress", (event) => {
+    if (event.payload.target === target) onProgress?.(event.payload);
+  });
+  try {
+    return target === "proxy"
+      ? await invoke<SpeedTestResult>("run_proxy_speed_test", { profile, config: requestConfig })
+      : await invoke<SpeedTestResult>("run_direct_speed_test", { config: requestConfig });
+  } finally {
+    unlisten();
+  }
 }
 
 export async function getNetworkTrafficSample(): Promise<NetworkTrafficSample> {
@@ -335,4 +435,75 @@ export async function getNetworkTrafficSample(): Promise<NetworkTrafficSample> {
     };
   }
   return invoke<NetworkTrafficSample>("get_network_traffic_sample");
+}
+
+export async function getTrafficMonitorCapability(): Promise<TrafficMonitorCapability> {
+  if (!isTauri) return { supported: true, requiresElevation: true };
+  return invoke<TrafficMonitorCapability>("get_traffic_monitor_capability");
+}
+
+export async function startTrafficMonitor(): Promise<TrafficMonitorSnapshot> {
+  if (!isTauri) {
+    mockTrafficMonitorStartedAt = Date.now();
+    return mockTrafficMonitorSnapshot();
+  }
+  return invoke<TrafficMonitorSnapshot>("start_traffic_monitor");
+}
+
+export async function getTrafficMonitorSnapshot(): Promise<TrafficMonitorSnapshot> {
+  if (!isTauri) return mockTrafficMonitorSnapshot();
+  return invoke<TrafficMonitorSnapshot>("get_traffic_monitor_snapshot");
+}
+
+export async function stopTrafficMonitor(): Promise<TrafficMonitorSnapshot> {
+  if (!isTauri) {
+    mockTrafficMonitorStartedAt = null;
+    return mockTrafficMonitorSnapshot();
+  }
+  return invoke<TrafficMonitorSnapshot>("stop_traffic_monitor");
+}
+
+export async function getTrafficApplicationIcon(applicationId: string): Promise<string> {
+  if (!isTauri) return "";
+  return invoke<string>("get_traffic_application_icon", { applicationId });
+}
+
+function mockTrafficMonitorSnapshot(): TrafficMonitorSnapshot {
+  const updatedAtMs = Date.now();
+  if (mockTrafficMonitorStartedAt === null) {
+    return {
+      status: "idle",
+      updatedAtMs,
+      applications: [],
+    };
+  }
+  const elapsedSeconds = Math.max((updatedAtMs - mockTrafficMonitorStartedAt) / 1000, 1);
+  const mockApplications = [
+    ["mock-chrome", "Google Chrome", 8, 1_820_000, 126_000],
+    ["mock-wechat", "微信", 4, 540_000, 92_000],
+    ["mock-code", "Visual Studio Code", 7, 210_000, 64_000],
+    ["mock-edge", "Microsoft Edge WebView2 Runtime Helper Process (64-bit)", 5, 128_000, 36_000],
+    ["mock-cloud", "OneDrive", 3, 76_000, 118_000],
+    ["system-unknown", "系统/未知", 2, 44_000, 31_000],
+    ["mock-qq", "QQ", 3, 39_000, 18_000],
+  ].slice(0, mockTrafficApplicationLimit).map(([id, name, processCount, downloadRate, uploadRate]) => {
+    const rankingMultiplier =
+      mockTrafficRankingShift && elapsedSeconds >= 5 && id === "mock-qq" ? 80 : 1;
+    const downloadBytes = Math.round(Number(downloadRate) * elapsedSeconds * rankingMultiplier);
+    const uploadBytes = Math.round(Number(uploadRate) * elapsedSeconds * rankingMultiplier);
+    return {
+      id: String(id),
+      name: String(name),
+      processCount: Number(processCount),
+      downloadBytes,
+      uploadBytes,
+      totalBytes: downloadBytes + uploadBytes,
+    };
+  });
+  return {
+    status: "running",
+    startedAtMs: mockTrafficMonitorStartedAt,
+    updatedAtMs,
+    applications: mockApplications.sort((left, right) => right.totalBytes - left.totalBytes),
+  };
 }

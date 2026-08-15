@@ -4,9 +4,12 @@ use anyhow::{Context, Result};
 use reqwest::{Client, Proxy};
 use serde::Deserialize;
 
-use crate::models::{IpInfo, ProxyProfile, SpeedTestConfig, SpeedTestResult, TestResult};
+use crate::models::{
+    IpInfo, ProxyProfile, SpeedTestConfig, SpeedTestProgress, SpeedTestResult, TestResult,
+};
 
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
+const SPEED_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
 struct IpifyResponse {
@@ -16,6 +19,15 @@ struct IpifyResponse {
 #[derive(Debug, Deserialize)]
 struct IpInfoResponse {
     ip: Option<String>,
+    city: Option<String>,
+    region: Option<String>,
+    country: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IpWhoIsResponse {
+    ip: Option<String>,
+    success: Option<bool>,
     city: Option<String>,
     region: Option<String>,
     country: Option<String>,
@@ -111,13 +123,9 @@ pub async fn refresh_ip_info(profile: &ProxyProfile, use_proxy: bool) -> Result<
 pub async fn run_proxy_speed_test(
     profile: &ProxyProfile,
     config: &SpeedTestConfig,
+    on_progress: &(dyn Fn(SpeedTestProgress) + Send + Sync),
 ) -> SpeedTestResult {
     let total_started = Instant::now();
-    let download_url = config.download_url.trim();
-    if !is_http_url(download_url) {
-        return speed_failure(total_started, "下载测速地址必须以 http:// 或 https:// 开头");
-    }
-
     let proxy = match Proxy::all(format!("http://{}", profile.address())) {
         Ok(proxy) => proxy,
         Err(error) => return speed_failure(total_started, &format!("代理地址无效: {error}")),
@@ -125,12 +133,46 @@ pub async fn run_proxy_speed_test(
 
     let client = match Client::builder()
         .proxy(proxy)
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(45))
         .build()
     {
         Ok(client) => client,
         Err(error) => return speed_failure(total_started, &format!("创建测速客户端失败: {error}")),
     };
+
+    run_speed_test_with_client(client, config, total_started, "proxy", on_progress).await
+}
+
+pub async fn run_direct_speed_test(
+    config: &SpeedTestConfig,
+    on_progress: &(dyn Fn(SpeedTestProgress) + Send + Sync),
+) -> SpeedTestResult {
+    let total_started = Instant::now();
+    let client = match Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(45))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return speed_failure(total_started, &format!("创建直连测速客户端失败: {error}"))
+        }
+    };
+
+    run_speed_test_with_client(client, config, total_started, "direct", on_progress).await
+}
+
+async fn run_speed_test_with_client(
+    client: Client,
+    config: &SpeedTestConfig,
+    total_started: Instant,
+    target: &str,
+    on_progress: &(dyn Fn(SpeedTestProgress) + Send + Sync),
+) -> SpeedTestResult {
+    let download_url = config.download_url.trim();
+    if !is_http_url(download_url) {
+        return speed_failure(total_started, "下载测速地址必须以 http:// 或 https:// 开头");
+    }
 
     let download_limit = config
         .download_bytes_limit
@@ -148,11 +190,30 @@ pub async fn run_proxy_speed_test(
         );
     }
 
+    emit_speed_progress(
+        on_progress,
+        target,
+        latency_ms,
+        0,
+        download_started.elapsed(),
+    );
+
     let mut downloaded_bytes = 0_u64;
+    let mut last_progress_emit = Instant::now();
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
                 downloaded_bytes += chunk.len() as u64;
+                if last_progress_emit.elapsed() >= SPEED_PROGRESS_INTERVAL {
+                    emit_speed_progress(
+                        on_progress,
+                        target,
+                        latency_ms,
+                        downloaded_bytes,
+                        download_started.elapsed(),
+                    );
+                    last_progress_emit = Instant::now();
+                }
                 if downloaded_bytes >= download_limit {
                     break;
                 }
@@ -170,6 +231,13 @@ pub async fn run_proxy_speed_test(
 
     let download_duration = download_started.elapsed();
     let download_mbps = mbps(downloaded_bytes, download_duration);
+    emit_speed_progress(
+        on_progress,
+        target,
+        latency_ms,
+        downloaded_bytes,
+        download_duration,
+    );
 
     SpeedTestResult {
         ok: true,
@@ -179,6 +247,22 @@ pub async fn run_proxy_speed_test(
         duration_ms: total_started.elapsed().as_millis(),
         message: String::new(),
     }
+}
+
+fn emit_speed_progress(
+    on_progress: &(dyn Fn(SpeedTestProgress) + Send + Sync),
+    target: &str,
+    latency_ms: u128,
+    downloaded_bytes: u64,
+    elapsed: Duration,
+) {
+    on_progress(SpeedTestProgress {
+        target: target.to_string(),
+        latency_ms,
+        download_mbps: mbps(downloaded_bytes, elapsed),
+        downloaded_bytes,
+        elapsed_ms: elapsed.as_millis(),
+    });
 }
 
 async fn fetch_ipinfo(client: &Client, started: Instant) -> Result<IpInfo> {
@@ -209,11 +293,34 @@ async fn fetch_ipinfo(client: &Client, started: Instant) -> Result<IpInfo> {
     })
 }
 
+async fn fetch_ipwhois(client: &Client, started: Instant) -> Result<IpInfo> {
+    let response = client
+        .get("https://ipwho.is/?lang=zh-CN")
+        .send()
+        .await?
+        .json::<IpWhoIsResponse>()
+        .await?;
+
+    if response.success == Some(false) {
+        anyhow::bail!("ipwho.is 查询失败");
+    }
+
+    Ok(IpInfo {
+        ip: clean_required_value(response.ip, "ipwho.is 未返回IP")?,
+        location: join_location([response.country, response.region, response.city], " "),
+        latency_ms: Some(started.elapsed().as_millis()),
+        source: "ipwho.is".to_string(),
+    })
+}
+
 async fn fetch_direct_ip_info(client: &Client, started: Instant) -> Result<IpInfo> {
     if let Ok(info) = fetch_tencent_ip2city(client, started).await {
         return Ok(info);
     }
     if let Ok(info) = fetch_myip_ipip(client, started).await {
+        return Ok(info);
+    }
+    if let Ok(info) = fetch_ipwhois(client, started).await {
         return Ok(info);
     }
     if let Ok(info) = fetch_ipinfo(client, started).await {
@@ -223,6 +330,9 @@ async fn fetch_direct_ip_info(client: &Client, started: Instant) -> Result<IpInf
 }
 
 async fn fetch_proxy_ip_info(client: &Client, started: Instant) -> Result<IpInfo> {
+    if let Ok(info) = fetch_ipwhois(client, started).await {
+        return Ok(info);
+    }
     if let Ok(info) = fetch_ipinfo(client, started).await {
         return Ok(info);
     }

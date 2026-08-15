@@ -1,111 +1,18 @@
 use crate::models::{
-    classify_rule, normalize_domain_rule, parse_cidr, PacRule, PacStrategy, ProxyProfile, RuleKind,
-    UnifiedLists,
+    classify_rule, normalize_domain_rule, parse_cidr, ProxyProfile, RuleKind, UnifiedLists,
 };
-
-const DIRECT_KEYWORDS: &[&str] = &[
-    ".cn",
-    ".com.cn",
-    ".net.cn",
-    ".org.cn",
-    "baidu.com",
-    "qq.com",
-    "163.com",
-    "126.com",
-    "taobao.com",
-    "tmall.com",
-    "jd.com",
-    "alipay.com",
-    "weibo.com",
-    "wechat.com",
-    "weixin.qq.com",
-    "bilibili.com",
-    "youku.com",
-    "iqiyi.com",
-    "aliyun.com",
-    "tencent.com",
-    "huawei.com",
-];
 
 pub fn normalize_rule(rule: &str) -> String {
     normalize_domain_rule(rule)
 }
 
-pub fn dedupe_rules(rules: &[PacRule]) -> Vec<PacRule> {
-    let mut normalized: Vec<PacRule> = Vec::new();
-
-    for rule in rules {
-        let domain = normalize_rule(&rule.domain);
-        if domain.is_empty() {
-            continue;
-        }
-        if !normalized.iter().any(|item| item.domain == domain) {
-            let mut next = rule.clone();
-            next.id = domain.clone();
-            next.domain = domain;
-            normalized.push(next);
-        }
-    }
-
-    normalized.sort_by(|left, right| {
-        let left_key = (left.domain.matches('.').count(), left.domain.len());
-        let right_key = (right.domain.matches('.').count(), right.domain.len());
-        left_key.cmp(&right_key)
-    });
-
-    let mut deduped: Vec<PacRule> = Vec::new();
-    'outer: for rule in normalized {
-        for kept in &deduped {
-            if rule.strategy == kept.strategy
-                && (rule.domain == kept.domain
-                    || rule.domain.ends_with(&format!(".{}", kept.domain)))
-            {
-                continue 'outer;
-            }
-        }
-        deduped.push(rule);
-    }
-
-    deduped
-}
-
 pub fn generate(profile: &ProxyProfile, unified: &UnifiedLists) -> String {
     let proxy = format!("PROXY {}", profile.address());
-    let rules = dedupe_rules(&profile.pac_rules);
-    let removed_builtin_direct_domains = profile
-        .removed_builtin_direct_domains
-        .iter()
-        .map(|domain| normalize_rule(domain))
-        .collect::<std::collections::HashSet<_>>();
-    let disabled_builtin_direct_domains = profile
-        .disabled_builtin_direct_domains
-        .iter()
-        .map(|domain| normalize_rule(domain))
-        .collect::<std::collections::HashSet<_>>();
 
-    // 1. pac_rules 保持仅域名后缀（向后兼容）
-    let mut proxy_domains: Vec<String> = rules
-        .iter()
-        .filter(|r| r.enabled && r.strategy == PacStrategy::Proxy)
-        .map(|r| normalize_rule(&r.domain))
-        .filter(|d| !d.is_empty())
-        .collect();
-    let mut direct_domains: Vec<String> = rules
-        .iter()
-        .filter(|r| r.enabled && r.strategy == PacStrategy::Direct)
-        .map(|r| normalize_rule(&r.domain))
-        .filter(|d| !d.is_empty())
-        .collect();
-    for kw in DIRECT_KEYWORDS {
-        let normalized_keyword = normalize_rule(kw);
-        if !removed_builtin_direct_domains.contains(&normalized_keyword)
-            && !disabled_builtin_direct_domains.contains(&normalized_keyword)
-        {
-            direct_domains.push((*kw).to_string());
-        }
-    }
+    let mut proxy_domains: Vec<String> = Vec::new();
+    let mut direct_domains: Vec<String> = Vec::new();
 
-    // 2. 统一名单按语法分类：域名 / IP 网段 / Shell 通配符
+    // 统一直连/代理名单按语法分类：域名 / IP 网段 / Shell 通配符
     let mut proxy_cidrs: Vec<(String, String)> = Vec::new();
     let mut proxy_globs: Vec<String> = Vec::new();
     let mut direct_cidrs: Vec<(String, String)> = Vec::new();
@@ -113,11 +20,17 @@ pub fn generate(profile: &ProxyProfile, unified: &UnifiedLists) -> String {
 
     if unified.proxy_enabled {
         for raw in &unified.proxy_domains {
+            if unified.is_proxy_rule_disabled(raw) {
+                continue;
+            }
             collect_unified_rule(raw, &mut proxy_domains, &mut proxy_cidrs, &mut proxy_globs);
         }
     }
     if unified.direct_enabled {
         for raw in &unified.direct_domains {
+            if unified.is_direct_rule_disabled(raw) {
+                continue;
+            }
             collect_unified_rule(
                 raw,
                 &mut direct_domains,
@@ -303,11 +216,10 @@ fn js_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        classify_rule, default_profile, parse_cidr, rule_works_in_manual, PacRule, PacStrategy,
-        RuleKind, UnifiedLists,
+        classify_rule, default_profile, parse_cidr, rule_works_in_manual, RuleKind, UnifiedLists,
     };
 
-    use super::{dedupe_rules, generate, normalize_rule};
+    use super::{generate, normalize_rule};
 
     fn empty_unified() -> UnifiedLists {
         UnifiedLists::default()
@@ -330,30 +242,6 @@ mod tests {
         assert!(!rule_works_in_manual("10.0.0.0/8"));
         // URL 通配符（含 ://）：Manual 不生效
         assert!(!rule_works_in_manual("http://*.jpg"));
-    }
-
-    #[test]
-    fn dedupes_child_domains_when_parent_exists() {
-        let rules = vec![
-            PacRule {
-                id: "a".into(),
-                domain: "google.com".into(),
-                strategy: PacStrategy::Proxy,
-                enabled: true,
-                note: None,
-            },
-            PacRule {
-                id: "b".into(),
-                domain: "mail.google.com".into(),
-                strategy: PacStrategy::Proxy,
-                enabled: true,
-                note: None,
-            },
-        ];
-
-        let deduped = dedupe_rules(&rules);
-        assert_eq!(deduped.len(), 1);
-        assert_eq!(deduped[0].domain, "google.com");
     }
 
     #[test]
@@ -387,8 +275,8 @@ mod tests {
     #[test]
     fn generates_expected_pac_content() {
         let content = generate(&default_profile(), &empty_unified());
-        assert!(content.contains("PROXY 127.0.0.1:1080"));
-        assert!(content.contains("\"google.com\""));
+        assert!(content.contains("PROXY 192.168.0.6:10808"));
+        assert!(content.contains("var directDomains"));
         assert!(content.contains("FindProxyForURL"));
         assert!(content.contains("bestDomainMatch"));
         assert!(content.contains("proxyDomainMatch.length >= directDomainMatch.length"));
@@ -396,34 +284,6 @@ mod tests {
         assert!(content.contains("matchCidrs"));
         assert!(content.contains("matchGlobs"));
         assert!(content.contains("shExpMatch"));
-    }
-
-    #[test]
-    fn excludes_removed_builtin_direct_domains_and_restores_by_clearing_them() {
-        let mut profile = default_profile();
-        profile.removed_builtin_direct_domains = vec!["*.BAIDU.COM".into()];
-
-        let removed_content = generate(&profile, &empty_unified());
-        assert!(!removed_content.contains("\"baidu.com\""));
-        assert!(removed_content.contains("\"qq.com\""));
-
-        profile.removed_builtin_direct_domains.clear();
-        let restored_content = generate(&profile, &empty_unified());
-        assert!(restored_content.contains("\"baidu.com\""));
-    }
-
-    #[test]
-    fn excludes_disabled_builtin_direct_domains_and_restores_by_clearing_them() {
-        let mut profile = default_profile();
-        profile.disabled_builtin_direct_domains = vec!["*.BAIDU.COM".into()];
-
-        let disabled_content = generate(&profile, &empty_unified());
-        assert!(!disabled_content.contains("\"baidu.com\""));
-        assert!(disabled_content.contains("\"qq.com\""));
-
-        profile.disabled_builtin_direct_domains.clear();
-        let restored_content = generate(&profile, &empty_unified());
-        assert!(restored_content.contains("\"baidu.com\""));
     }
 
     #[test]
@@ -452,6 +312,24 @@ mod tests {
         let content = generate(&default_profile(), &unified);
         assert!(!content.contains("direct-skip.test"));
         assert!(!content.contains("proxy-skip.test"));
+    }
+
+    #[test]
+    fn skips_individually_disabled_unified_rules() {
+        let mut unified = empty_unified();
+        unified.direct_enabled = true;
+        unified.proxy_enabled = true;
+        unified.direct_domains = vec!["direct-on.test".into(), "direct-off.test".into()];
+        unified.proxy_domains = vec!["proxy-on.test".into(), "proxy-off.test".into()];
+        unified.disabled_direct_domains = vec!["DIRECT-OFF.TEST".into()];
+        unified.disabled_proxy_domains = vec!["proxy-off.test".into()];
+
+        let content = generate(&default_profile(), &unified);
+
+        assert!(content.contains("\"direct-on.test\""));
+        assert!(!content.contains("direct-off.test"));
+        assert!(content.contains("\"proxy-on.test\""));
+        assert!(!content.contains("proxy-off.test"));
     }
 
     #[test]

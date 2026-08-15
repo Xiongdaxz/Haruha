@@ -19,20 +19,48 @@ mod net;
 mod pac;
 mod pac_server;
 mod platform;
+mod single_instance;
+mod traffic_monitor;
 
 use config::{append_app_log_line, write_pac_file, ConfigStore};
 use models::{
     IpInfo, NetworkTrafficSample, ProxyMode, ProxyProfile, ProxyState, SpeedTestConfig,
-    SpeedTestResult, TestResult, UnifiedLists,
+    SpeedTestProgress, SpeedTestResult, TestResult, TrafficMonitorCapability,
+    TrafficMonitorSnapshot, UnifiedLists,
 };
 use pac_server::PacServer;
 
+pub(crate) const MAIN_WINDOW_TITLE: &str = "Haruha";
 const FAVICON_CACHE_HEADER: &[u8] = b"haruha-favicon-v2\n";
 
 struct AppState {
     store: Mutex<ConfigStore>,
     pac_server: Mutex<PacServer>,
+    mode_change: tokio::sync::Mutex<()>,
+    last_proxy_state: Mutex<Option<ProxyState>>,
     is_exiting: Mutex<bool>,
+    traffic_monitor: traffic_monitor::TrafficMonitorManager,
+    _single_instance: single_instance::SingleInstanceGuard,
+}
+
+#[derive(Clone)]
+struct RuntimeSnapshot {
+    profile: ProxyProfile,
+    unified: UnifiedLists,
+    #[cfg(not(windows))]
+    system_state: ProxyState,
+    #[cfg(windows)]
+    pac_server_port: Option<u16>,
+    #[cfg(windows)]
+    system_proxy: platform::SystemProxySnapshot,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedConfiguration {
+    profile: ProxyProfile,
+    unified_lists: UnifiedLists,
+    proxy_state: ProxyState,
 }
 
 #[tauri::command]
@@ -52,10 +80,11 @@ fn get_active_profile(state: tauri::State<'_, AppState>) -> Result<ProxyProfile,
 }
 
 #[tauri::command]
-fn save_profile(
+async fn save_profile(
     profile: ProxyProfile,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyProfile, String> {
+    let _mode_change = state.mode_change.lock().await;
     let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
     store
         .save_profile(profile)
@@ -74,31 +103,118 @@ async fn save_unified_lists(
     lists: UnifiedLists,
     state: tauri::State<'_, AppState>,
 ) -> Result<UnifiedLists, String> {
-    let saved = {
-        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
-        store
-            .set_unified_lists(lists)
-            .map_err(|error| error.to_string())?
-    };
+    let _mode_change = state.mode_change.lock().await;
+    let lists = ConfigStore::prepare_unified_lists(lists);
+    let previous = runtime_snapshot(&state)?;
+    let pac_content =
+        write_pac_file(&previous.profile, &lists).map_err(|error| error.to_string())?;
 
-    // 名单变更后，若当前处于 Manual/Pac 模式，需重新应用以让名单即时生效
-    let profile = {
-        let store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
-        store.active_profile()
-    };
-    match profile.mode {
+    // 名单变更后始终刷新磁盘 PAC；当前模式需要时再应用系统设置，最后提交配置。
+    // 任一步失败都恢复旧 PAC、系统代理和持久化状态。
+    match previous.profile.mode {
         ProxyMode::Manual => {
-            let proxy_state = apply_manual_profile(profile, &state).await?;
-            broadcast_proxy_state(&app, &proxy_state);
+            let profile = previous.profile.clone();
+            let applied_lists = lists.clone();
+            if let Err(error) =
+                run_blocking(move || platform::enable_manual(&profile, &applied_lists)).await
+            {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
         }
         ProxyMode::Pac => {
-            let proxy_state = apply_pac_profile(profile, &state).await?;
-            broadcast_proxy_state(&app, &proxy_state);
+            let pac_url = match start_pac_server(&state, pac_content) {
+                Ok(url) => url,
+                Err(error) => return Err(error_with_rollback(error, &state, &previous).await),
+            };
+            if let Err(error) = run_blocking(move || platform::enable_pac(&pac_url)).await {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
         }
         ProxyMode::Off => {}
     }
 
+    let saved = {
+        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
+        store
+            .set_unified_lists(lists)
+            .map_err(|error| error.to_string())
+    };
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(error) => return Err(error_with_rollback(error, &state, &previous).await),
+    };
+    if previous.profile.mode != ProxyMode::Off {
+        let proxy_state = logical_current_proxy_state(&state);
+        broadcast_proxy_state(&app, &proxy_state);
+    }
+
     Ok(saved)
+}
+
+#[tauri::command]
+async fn save_configuration(
+    app: AppHandle,
+    profile: ProxyProfile,
+    lists: UnifiedLists,
+    state: tauri::State<'_, AppState>,
+) -> Result<SavedConfiguration, String> {
+    let _mode_change = state.mode_change.lock().await;
+    let profile = ConfigStore::prepare_profile(profile).map_err(|error| error.to_string())?;
+    let lists = ConfigStore::prepare_unified_lists(lists);
+    let previous = runtime_snapshot(&state)?;
+    let pac_content = write_pac_file(&profile, &lists).map_err(|error| error.to_string())?;
+
+    match profile.mode {
+        ProxyMode::Manual => {
+            let applied_profile = profile.clone();
+            let applied_lists = lists.clone();
+            if let Err(error) =
+                run_blocking(move || platform::enable_manual(&applied_profile, &applied_lists))
+                    .await
+            {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
+            if let Err(error) = stop_pac_server(&state) {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
+        }
+        ProxyMode::Pac => {
+            let pac_url = match start_pac_server(&state, pac_content) {
+                Ok(url) => url,
+                Err(error) => return Err(error_with_rollback(error, &state, &previous).await),
+            };
+            if let Err(error) = run_blocking(move || platform::enable_pac(&pac_url)).await {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
+        }
+        ProxyMode::Off => {
+            if let Err(error) = run_blocking(platform::disable_proxy).await {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
+            if let Err(error) = stop_pac_server(&state) {
+                return Err(error_with_rollback(error, &state, &previous).await);
+            }
+        }
+    }
+
+    let saved = {
+        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
+        store
+            .save_configuration(profile, lists)
+            .map_err(|error| error.to_string())
+    };
+    let (profile, unified_lists) = match saved {
+        Ok(saved) => saved,
+        Err(error) => return Err(error_with_rollback(error, &state, &previous).await),
+    };
+    let proxy_state = logical_proxy_state(platform::read_state(), &profile);
+    broadcast_proxy_state(&app, &proxy_state);
+
+    Ok(SavedConfiguration {
+        profile,
+        unified_lists,
+        proxy_state,
+    })
 }
 
 #[tauri::command]
@@ -113,31 +229,33 @@ async fn enable_manual(
 }
 
 async fn apply_manual_profile(
+    profile: ProxyProfile,
+    state: &AppState,
+) -> Result<ProxyState, String> {
+    let _mode_change = state.mode_change.lock().await;
+    apply_manual_profile_locked(profile, state).await
+}
+
+async fn apply_manual_profile_locked(
     mut profile: ProxyProfile,
     state: &AppState,
 ) -> Result<ProxyState, String> {
     profile.mode = ProxyMode::Manual;
-    let (profile, unified) = {
-        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
-        let saved = store
-            .save_profile(profile)
-            .map_err(|error| error.to_string())?;
-        (saved, store.unified_lists().clone())
-    };
-
-    {
-        let mut server = state
-            .pac_server
-            .lock()
-            .map_err(|_| "PAC服务锁已损坏".to_string())?;
-        server.stop();
-    }
+    let profile = ConfigStore::prepare_profile(profile).map_err(|error| error.to_string())?;
+    let previous = runtime_snapshot(state)?;
+    let unified = previous.unified.clone();
 
     let applied_profile = profile.clone();
     if let Err(error) =
         run_blocking(move || platform::enable_manual(&applied_profile, &unified)).await
     {
-        return Err(error);
+        return Err(error_with_rollback(error, state, &previous).await);
+    }
+    if let Err(error) = stop_pac_server(state) {
+        return Err(error_with_rollback(error, state, &previous).await);
+    }
+    if let Err(error) = save_profile_to_state(state, profile.clone()) {
+        return Err(error_with_rollback(error, state, &previous).await);
     }
     Ok(logical_proxy_state(platform::read_state(), &profile))
 }
@@ -153,31 +271,32 @@ async fn enable_pac(
     Ok(proxy_state)
 }
 
-async fn apply_pac_profile(
+async fn apply_pac_profile(profile: ProxyProfile, state: &AppState) -> Result<ProxyState, String> {
+    let _mode_change = state.mode_change.lock().await;
+    apply_pac_profile_locked(profile, state).await
+}
+
+async fn apply_pac_profile_locked(
     mut profile: ProxyProfile,
     state: &AppState,
 ) -> Result<ProxyState, String> {
     profile.mode = ProxyMode::Pac;
-    let (profile, unified) = {
-        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
-        let saved = store
-            .save_profile(profile)
-            .map_err(|error| error.to_string())?;
-        (saved, store.unified_lists().clone())
-    };
+    let profile = ConfigStore::prepare_profile(profile).map_err(|error| error.to_string())?;
+    let previous = runtime_snapshot(state)?;
+    let unified = previous.unified.clone();
 
     let content = write_pac_file(&profile, &unified).map_err(|error| error.to_string())?;
-    let pac_url = {
-        let mut server = state
-            .pac_server
-            .lock()
-            .map_err(|_| "PAC服务锁已损坏".to_string())?;
-        server
-            .start(content, 18765)
-            .map_err(|error| error.to_string())?
+    let pac_url = match start_pac_server(state, content) {
+        Ok(url) => url,
+        Err(error) => return Err(error_with_rollback(error, state, &previous).await),
     };
 
-    run_blocking(move || platform::enable_pac(&pac_url)).await?;
+    if let Err(error) = run_blocking(move || platform::enable_pac(&pac_url)).await {
+        return Err(error_with_rollback(error, state, &previous).await);
+    }
+    if let Err(error) = save_profile_to_state(state, profile.clone()) {
+        return Err(error_with_rollback(error, state, &previous).await);
+    }
     Ok(logical_proxy_state(platform::read_state(), &profile))
 }
 
@@ -192,23 +311,210 @@ async fn disable_proxy(
 }
 
 async fn apply_disable_proxy(state: &AppState) -> Result<ProxyState, String> {
-    run_blocking(platform::disable_proxy).await?;
-    {
-        let mut server = state
-            .pac_server
-            .lock()
-            .map_err(|_| "PAC服务锁已损坏".to_string())?;
-        server.stop();
+    let _mode_change = state.mode_change.lock().await;
+    apply_disable_proxy_locked(state).await
+}
+
+async fn apply_disable_proxy_locked(state: &AppState) -> Result<ProxyState, String> {
+    let previous = runtime_snapshot(state)?;
+    if let Err(error) = run_blocking(platform::disable_proxy).await {
+        return Err(error_with_rollback(error, state, &previous).await);
     }
-    {
-        let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
-        let mut profile = store.active_profile();
-        profile.mode = ProxyMode::Off;
-        store
-            .save_profile(profile)
-            .map_err(|error| error.to_string())?;
+    if let Err(error) = stop_pac_server(state) {
+        return Err(error_with_rollback(error, state, &previous).await);
+    }
+    let mut profile = previous.profile.clone();
+    profile.mode = ProxyMode::Off;
+    if let Err(error) = save_profile_to_state(state, profile) {
+        return Err(error_with_rollback(error, state, &previous).await);
     }
     Ok(platform::read_state())
+}
+
+fn runtime_snapshot(state: &AppState) -> Result<RuntimeSnapshot, String> {
+    let (profile, unified) = {
+        let store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
+        (store.active_profile(), store.unified_lists().clone())
+    };
+    #[cfg(windows)]
+    let pac_server_port = state
+        .pac_server
+        .lock()
+        .map_err(|_| "PAC服务锁已损坏".to_string())?
+        .port();
+    Ok(RuntimeSnapshot {
+        profile,
+        unified,
+        #[cfg(not(windows))]
+        system_state: platform::read_state(),
+        #[cfg(windows)]
+        pac_server_port,
+        #[cfg(windows)]
+        system_proxy: platform::capture_system_proxy_snapshot()
+            .map_err(|error| error.to_string())?,
+    })
+}
+
+fn save_profile_to_state(state: &AppState, profile: ProxyProfile) -> Result<ProxyProfile, String> {
+    let mut store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
+    store
+        .save_profile(profile)
+        .map_err(|error| error.to_string())
+}
+
+fn start_pac_server(state: &AppState, content: String) -> Result<String, String> {
+    let mut server = state
+        .pac_server
+        .lock()
+        .map_err(|_| "PAC服务锁已损坏".to_string())?;
+    server
+        .start(content, 18765)
+        .map_err(|error| error.to_string())
+}
+
+fn stop_pac_server(state: &AppState) -> Result<(), String> {
+    let mut server = state
+        .pac_server
+        .lock()
+        .map_err(|_| "PAC服务锁已损坏".to_string())?;
+    server.stop();
+    Ok(())
+}
+
+async fn error_with_rollback(
+    original_error: String,
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+) -> String {
+    match restore_runtime_snapshot(state, snapshot).await {
+        Ok(()) => original_error,
+        Err(rollback_error) => {
+            format!("{original_error}；恢复原代理状态也失败: {rollback_error}")
+        }
+    }
+}
+
+async fn restore_runtime_snapshot(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let pac_result = restore_pac_server_snapshot(state, snapshot);
+        let system_proxy = snapshot.system_proxy.clone();
+        let system_result =
+            run_blocking(move || platform::restore_system_proxy_snapshot(&system_proxy)).await;
+        return combine_restore_results(pac_result, system_result);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let previous_pac_content = write_pac_file(&snapshot.profile, &snapshot.unified)
+            .map_err(|error| error.to_string())?;
+        let desired_mode = if snapshot.profile.mode == ProxyMode::Off {
+            snapshot.system_state.mode.clone()
+        } else {
+            snapshot.profile.mode.clone()
+        };
+
+        match desired_mode {
+            ProxyMode::Manual => {
+                let mut profile = snapshot.profile.clone();
+                if snapshot.profile.mode == ProxyMode::Off {
+                    let address = snapshot
+                        .system_state
+                        .address
+                        .as_deref()
+                        .ok_or_else(|| "无法读取原手动代理地址".to_string())?;
+                    let (host, port) = split_proxy_address(address)
+                        .ok_or_else(|| "无法解析原手动代理地址".to_string())?;
+                    profile.host = host;
+                    profile.port = port;
+                }
+                let unified = snapshot.unified.clone();
+                let restored =
+                    run_blocking(move || platform::enable_manual(&profile, &unified)).await;
+                let stopped = stop_pac_server(state);
+                restored?;
+                stopped
+            }
+            ProxyMode::Pac => {
+                if snapshot.profile.mode == ProxyMode::Off {
+                    let pac_url = snapshot
+                        .system_state
+                        .pac_url
+                        .clone()
+                        .ok_or_else(|| "无法读取原 PAC 地址".to_string())?;
+                    let restored = run_blocking(move || platform::enable_pac(&pac_url)).await;
+                    let stopped = stop_pac_server(state);
+                    restored?;
+                    return stopped;
+                }
+                let pac_url = start_pac_server(state, previous_pac_content)?;
+                run_blocking(move || platform::enable_pac(&pac_url)).await
+            }
+            ProxyMode::Off => {
+                let restored = run_blocking(platform::disable_proxy).await;
+                let stopped = stop_pac_server(state);
+                restored?;
+                stopped
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn restore_pac_server_snapshot(state: &AppState, snapshot: &RuntimeSnapshot) -> Result<(), String> {
+    let content =
+        write_pac_file(&snapshot.profile, &snapshot.unified).map_err(|error| error.to_string())?;
+    let mut server = state
+        .pac_server
+        .lock()
+        .map_err(|_| "PAC服务锁已损坏".to_string())?;
+
+    match snapshot.pac_server_port {
+        Some(port) => {
+            server
+                .start(content, port)
+                .map_err(|error| error.to_string())?;
+            if server.port() != Some(port) {
+                let actual_port = server.port();
+                server.stop();
+                return Err(format!(
+                    "无法在原端口 {port} 恢复 PAC 服务，实际绑定端口: {actual_port:?}"
+                ));
+            }
+        }
+        None => server.stop(),
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn combine_restore_results(
+    pac_result: Result<(), String>,
+    system_result: Result<(), String>,
+) -> Result<(), String> {
+    match (pac_result, system_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(pac_error), Ok(())) => Err(format!("恢复 PAC 运行状态失败: {pac_error}")),
+        (Ok(()), Err(system_error)) => Err(format!("恢复系统代理快照失败: {system_error}")),
+        (Err(pac_error), Err(system_error)) => Err(format!(
+            "恢复 PAC 运行状态失败: {pac_error}；恢复系统代理快照失败: {system_error}"
+        )),
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn split_proxy_address(address: &str) -> Option<(String, u16)> {
+    let address = address.trim();
+    let separator = address.rfind(':')?;
+    let host = address[..separator].trim();
+    let port = address[separator + 1..].trim().parse().ok()?;
+    if host.is_empty() || port == 0 {
+        return None;
+    }
+    Some((host.to_string(), port))
 }
 
 async fn run_blocking<F>(action: F) -> Result<(), String>
@@ -223,6 +529,7 @@ where
 
 #[tauri::command]
 async fn test_proxy(profile: ProxyProfile) -> Result<TestResult, String> {
+    let profile = ConfigStore::prepare_profile(profile).map_err(|error| error.to_string())?;
     Ok(net::test_proxy(&profile).await)
 }
 
@@ -248,8 +555,24 @@ async fn refresh_ip_info(
 async fn run_proxy_speed_test(
     profile: ProxyProfile,
     config: SpeedTestConfig,
+    app: AppHandle,
 ) -> Result<SpeedTestResult, String> {
-    Ok(net::run_proxy_speed_test(&profile, &config).await)
+    let profile = ConfigStore::prepare_profile(profile).map_err(|error| error.to_string())?;
+    let emit_progress = move |progress: SpeedTestProgress| {
+        let _ = app.emit("speed-test-progress", progress);
+    };
+    Ok(net::run_proxy_speed_test(&profile, &config, &emit_progress).await)
+}
+
+#[tauri::command]
+async fn run_direct_speed_test(
+    config: SpeedTestConfig,
+    app: AppHandle,
+) -> Result<SpeedTestResult, String> {
+    let emit_progress = move |progress: SpeedTestProgress| {
+        let _ = app.emit("speed-test-progress", progress);
+    };
+    Ok(net::run_direct_speed_test(&config, &emit_progress).await)
 }
 
 #[tauri::command]
@@ -264,6 +587,45 @@ fn get_network_traffic_sample() -> Result<NetworkTrafficSample, String> {
     })
 }
 
+#[tauri::command]
+fn get_traffic_monitor_capability(state: tauri::State<'_, AppState>) -> TrafficMonitorCapability {
+    state.traffic_monitor.capability()
+}
+
+#[tauri::command]
+async fn start_traffic_monitor(
+    state: tauri::State<'_, AppState>,
+) -> Result<TrafficMonitorSnapshot, String> {
+    let monitor = state.traffic_monitor.clone();
+    tauri::async_runtime::spawn_blocking(move || monitor.start())
+        .await
+        .map_err(|error| format!("启动应用流量监控任务失败：{error}"))?
+}
+
+#[tauri::command]
+fn get_traffic_monitor_snapshot(state: tauri::State<'_, AppState>) -> TrafficMonitorSnapshot {
+    state.traffic_monitor.snapshot()
+}
+
+#[tauri::command]
+fn stop_traffic_monitor(state: tauri::State<'_, AppState>) -> TrafficMonitorSnapshot {
+    state.traffic_monitor.stop()
+}
+
+#[tauri::command]
+async fn get_traffic_application_icon(
+    application_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let path = state
+        .traffic_monitor
+        .application_path(application_id.trim())
+        .ok_or_else(|| "该应用没有可读取的图标".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || traffic_monitor::application_icon_data_url(&path))
+        .await
+        .map_err(|error| format!("读取应用图标任务失败：{error}"))?
+}
+
 fn current_timestamp_ms() -> Result<u64, String> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -273,7 +635,13 @@ fn current_timestamp_ms() -> Result<u64, String> {
 }
 
 fn logical_proxy_state(mut proxy_state: ProxyState, profile: &ProxyProfile) -> ProxyState {
-    if matches!(proxy_state.mode, ProxyMode::Manual) {
+    if matches!(proxy_state.mode, ProxyMode::Manual)
+        && proxy_state
+            .address
+            .as_deref()
+            .map(|address| address.trim().is_empty())
+            .unwrap_or(true)
+    {
         proxy_state.address = Some(profile.address());
     }
     proxy_state
@@ -468,22 +836,17 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 fn restore_proxy_runtime(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let system_mode = platform::read_state().mode;
     let (profile, unified) = {
         let store = state.store.lock().map_err(|_| "配置锁已损坏".to_string())?;
         (store.active_profile(), store.unified_lists().clone())
     };
 
-    let desired_mode = if profile.mode != ProxyMode::Off {
-        profile.mode.clone()
-    } else {
-        system_mode
-    };
-    if desired_mode == ProxyMode::Off {
+    // 配置为关闭时尊重现有系统设置，避免首次启动覆盖用户自己的代理。
+    if profile.mode == ProxyMode::Off {
         return Ok(());
     }
 
-    match desired_mode {
+    match profile.mode {
         ProxyMode::Manual => {
             platform::enable_manual(&profile, &unified).map_err(|error| error.to_string())
         }
@@ -598,6 +961,23 @@ mod tray_icon_tests {
         assert_eq!(pixel(&enabled, 30, 2), [255, 255, 255, 255]);
         assert_eq!(pixel(&enabled, 16, 16)[3], 255);
         assert_ne!(enabled.rgba(), disabled.rgba());
+    }
+
+    #[test]
+    fn splits_ipv4_hostname_and_bracketed_ipv6_proxy_addresses() {
+        assert_eq!(
+            split_proxy_address("127.0.0.1:10808"),
+            Some(("127.0.0.1".into(), 10808))
+        );
+        assert_eq!(
+            split_proxy_address("proxy.example.com:8080"),
+            Some(("proxy.example.com".into(), 8080))
+        );
+        assert_eq!(
+            split_proxy_address("[2001:db8::1]:3128"),
+            Some(("[2001:db8::1]".into(), 3128))
+        );
+        assert_eq!(split_proxy_address("missing-port"), None);
     }
 }
 
@@ -717,17 +1097,33 @@ fn hide_tray_panel(app: &AppHandle) {
 
 async fn apply_mode_from_app(app: &AppHandle, mode: ProxyMode) -> Result<ProxyState, String> {
     let state = app.state::<AppState>();
+    apply_saved_proxy_mode(mode, &state).await
+}
+
+async fn apply_saved_proxy_mode(mode: ProxyMode, state: &AppState) -> Result<ProxyState, String> {
+    let _mode_change = state.mode_change.lock().await;
     match mode {
         ProxyMode::Manual => {
-            let profile = active_profile_from_state(&state)?;
-            apply_manual_profile(profile, &state).await
+            let profile = active_profile_from_state(state)?;
+            apply_manual_profile_locked(profile, state).await
         }
         ProxyMode::Pac => {
-            let profile = active_profile_from_state(&state)?;
-            apply_pac_profile(profile, &state).await
+            let profile = active_profile_from_state(state)?;
+            apply_pac_profile_locked(profile, state).await
         }
-        ProxyMode::Off => apply_disable_proxy(&state).await,
+        ProxyMode::Off => apply_disable_proxy_locked(state).await,
     }
+}
+
+#[tauri::command]
+async fn set_proxy_mode(
+    app: AppHandle,
+    mode: ProxyMode,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProxyState, String> {
+    let proxy_state = apply_saved_proxy_mode(mode, &state).await?;
+    broadcast_proxy_state(&app, &proxy_state);
+    Ok(proxy_state)
 }
 
 fn active_profile_from_state(state: &AppState) -> Result<ProxyProfile, String> {
@@ -736,8 +1132,24 @@ fn active_profile_from_state(state: &AppState) -> Result<ProxyProfile, String> {
 }
 
 fn broadcast_proxy_state(app: &AppHandle, proxy_state: &ProxyState) {
+    if let Ok(mut last_proxy_state) = app.state::<AppState>().last_proxy_state.lock() {
+        *last_proxy_state = Some(proxy_state.clone());
+    }
     sync_tray_icon(app, proxy_state);
     let _ = app.emit("proxy-state-changed", proxy_state);
+}
+
+fn refresh_proxy_state_if_changed(app: &AppHandle) {
+    let proxy_state = logical_current_proxy_state(&app.state::<AppState>());
+    let has_changed = app
+        .state::<AppState>()
+        .last_proxy_state
+        .lock()
+        .map(|last_proxy_state| last_proxy_state.as_ref() != Some(&proxy_state))
+        .unwrap_or(true);
+    if has_changed {
+        broadcast_proxy_state(app, &proxy_state);
+    }
 }
 
 #[tauri::command]
@@ -762,6 +1174,7 @@ fn exit_from_tray(app: AppHandle) {
     }
 
     tauri::async_runtime::spawn(async move {
+        app.state::<AppState>().traffic_monitor.shutdown();
         if let Err(error) = apply_mode_from_app(&app, ProxyMode::Off).await {
             eprintln!("退出前关闭代理失败: {error}");
         }
@@ -773,13 +1186,32 @@ fn exit_from_tray(app: AppHandle) {
 }
 
 pub fn run() {
+    if traffic_monitor::run_helper_if_requested() {
+        return;
+    }
+
+    let single_instance = match single_instance::acquire() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            eprintln!("检测到同构建类型的 Haruha 已在运行，当前进程退出");
+            return;
+        }
+        Err(error) => {
+            eprintln!("无法建立单实例保护: {error:#}");
+            return;
+        }
+    };
     let store = ConfigStore::load().expect("无法初始化配置");
 
     tauri::Builder::default()
         .manage(AppState {
             store: Mutex::new(store),
             pac_server: Mutex::new(PacServer::new()),
+            mode_change: tokio::sync::Mutex::new(()),
+            last_proxy_state: Mutex::new(None),
             is_exiting: Mutex::new(false),
+            traffic_monitor: traffic_monitor::TrafficMonitorManager::new(),
+            _single_instance: single_instance,
         })
         .invoke_handler(tauri::generate_handler![
             append_app_log,
@@ -788,13 +1220,21 @@ pub fn run() {
             save_profile,
             get_unified_lists,
             save_unified_lists,
+            save_configuration,
             enable_manual,
             enable_pac,
             disable_proxy,
+            set_proxy_mode,
             test_proxy,
             refresh_ip_info,
             run_proxy_speed_test,
+            run_direct_speed_test,
             get_network_traffic_sample,
+            get_traffic_monitor_capability,
+            start_traffic_monitor,
+            get_traffic_monitor_snapshot,
+            stop_traffic_monitor,
+            get_traffic_application_icon,
             get_quick_site_icon,
             get_config_dir,
             open_config_dir,
@@ -814,6 +1254,9 @@ pub fn run() {
             if window.label() != "main" {
                 return;
             }
+            if let WindowEvent::Focused(true) = event {
+                refresh_proxy_state_if_changed(window.app_handle());
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let is_exiting = window
                     .app_handle()
@@ -830,7 +1273,7 @@ pub fn run() {
         })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title("Haruha");
+                let _ = window.set_title(MAIN_WINDOW_TITLE);
             }
             if let Err(error) = restore_proxy_runtime(app.state::<AppState>()) {
                 eprintln!("恢复代理运行服务失败: {error}");

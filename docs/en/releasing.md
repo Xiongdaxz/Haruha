@@ -57,7 +57,7 @@ bun run tauri:build:windows -- -Proxy http://127.0.0.1:7890
 Typical output:
 
 ```text
-src-tauri/target/release/proxy-manager-next.exe
+src-tauri/target/release/Haruha.exe
 src-tauri/target/release/bundle/msi/*.msi
 ```
 
@@ -68,7 +68,7 @@ Do not commit these binaries. Upload them only to the matching Release.
 Install and run on a Windows machine or clean VM without the source tree. Test uninstall, upgrade, tray behavior, proxy recovery, and the Chinese installer UI. Record file names, byte sizes, and SHA-256 hashes:
 
 ```powershell
-Get-FileHash .\src-tauri\target\release\proxy-manager-next.exe -Algorithm SHA256
+Get-FileHash .\src-tauri\target\release\Haruha.exe -Algorithm SHA256
 Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
   Get-FileHash -Algorithm SHA256
 ```
@@ -90,7 +90,7 @@ If no signing key is available, use an annotated `git tag -a` and do not imply t
 ```powershell
 gh release create v0.1.0 --draft --verify-tag `
   --title "Haruha v0.1.0" `
-  .\src-tauri\target\release\proxy-manager-next.exe `
+  .\src-tauri\target\release\Haruha.exe `
   .\src-tauri\target\release\bundle\msi\*.msi `
   .\SHA256SUMS.txt
 ```

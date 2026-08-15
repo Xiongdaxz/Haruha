@@ -1,5 +1,5 @@
 import { defaultSpeedTestConfig } from "../lib/api";
-import type { SpeedTestConfig, SpeedTestHistoryEntry } from "../lib/types";
+import type { SpeedTestConfig, SpeedTestHistoryEntry, SpeedTestTarget } from "../lib/types";
 import {
   SPEED_TEST_HISTORY_STORAGE_KEY,
   SPEED_TEST_STORAGE_KEY,
@@ -24,8 +24,22 @@ export function readStoredSpeedTestConfig(): SpeedTestConfig {
   if (!rawValue) return defaultSpeedTestConfig;
   try {
     const parsedValue = JSON.parse(rawValue) as Partial<SpeedTestConfig>;
+    const isPreviousDefault = [1_048_576, 5_242_880].some(
+      (bytes) =>
+        parsedValue.downloadUrl === `https://speed.cloudflare.com/__down?bytes=${bytes}` &&
+        parsedValue.downloadBytesLimit === bytes,
+    );
+    if (isPreviousDefault) return defaultSpeedTestConfig;
+    const directDownloadUrl =
+      parsedValue.directDownloadUrl === "https://mirrors.aliyun.com/ubuntu/ls-lR.gz"
+        ? defaultSpeedTestConfig.directDownloadUrl
+        : parsedValue.directDownloadUrl;
     return {
       downloadUrl: typeof parsedValue.downloadUrl === "string" ? parsedValue.downloadUrl : defaultSpeedTestConfig.downloadUrl,
+      directDownloadUrl:
+        typeof directDownloadUrl === "string"
+          ? directDownloadUrl
+          : defaultSpeedTestConfig.directDownloadUrl,
       downloadBytesLimit:
         typeof parsedValue.downloadBytesLimit === "number"
           ? parsedValue.downloadBytesLimit
@@ -53,6 +67,7 @@ export function readStoredSpeedTestHistory(): SpeedTestHistoryEntry[] {
         return {
           id: value.id,
           createdAt: value.createdAt,
+          target: readSpeedTestTarget(value.target),
           ok: value.ok,
           latencyMs: readOptionalNumber(value.latencyMs),
           downloadMbps: readOptionalNumber(value.downloadMbps),
@@ -71,11 +86,19 @@ export function readStoredSpeedTestHistory(): SpeedTestHistoryEntry[] {
 export function readStoredThemePreference(): ThemePreference {
   if (typeof window === "undefined") return "haruha";
   const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return themeOptions.some((option) => option.key === storedTheme) ? (storedTheme as ThemePreference) : "haruha";
+  return isThemePreference(storedTheme) ? storedTheme : "haruha";
+}
+
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return typeof value === "string" && themeOptions.some((option) => option.key === value);
 }
 
 function readOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readSpeedTestTarget(value: unknown): SpeedTestTarget {
+  return value === "direct" ? "direct" : "proxy";
 }
 
 export function getSystemTheme(): ResolvedTheme {
