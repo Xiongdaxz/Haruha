@@ -1,6 +1,6 @@
 {
   "name": "proxy-manager-next",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Haruha cross-platform system proxy manager built with Tauri, React, and Rust",
   "license": "MIT",

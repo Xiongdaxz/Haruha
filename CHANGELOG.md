@@ -6,6 +6,20 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [
 
 ## Unreleased
 
+## 0.1.2 - 2026-08-17
+
+### 中文
+
+- 精简托盘快捷面板：代理模式和主题使用紧凑的分段切换，支持键盘导航，并仅在用户主动切换时播放滑动反馈。
+- 更新应用与托盘图标的透明画布和显示比例，使不同代理状态在系统托盘中更清晰。
+- 修复旧版内置直连规则的迁移：历史配置仅清理一次，迁移后用户重新添加的同名规则会被保留。
+
+### English
+
+- Streamlined the tray panel with compact segmented controls for proxy modes and themes, keyboard navigation, and sliding feedback only after user-initiated switches.
+- Updated the transparent canvas and scale of the app and tray icons so different proxy states are clearer in the system tray.
+- Fixed migration of a legacy built-in direct rule so historical configurations are cleaned once while the same rule remains available when users add it again later.
+
 ## 0.1.1 - 2026-08-15
 
 ### 中文

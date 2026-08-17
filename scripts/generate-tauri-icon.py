@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageOps
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,12 +11,8 @@ TRAY_ICON_SIZE = 32
 
 
 def make_icon_canvas(source: Image.Image, size: int) -> Image.Image:
-    margin = max(2, int(size * 0.07))
-    target = size - margin * 2
-    leaf = ImageOps.contain(source, (target, target), Image.Resampling.LANCZOS)
+    leaf = ImageOps.contain(source, (size, size), Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    radius = max(3, round(size * 0.17))
-    ImageDraw.Draw(canvas).rounded_rectangle((0, 0, size - 1, size - 1), radius, fill="white")
     canvas.alpha_composite(leaf, ((size - leaf.width) // 2, (size - leaf.height) // 2))
     return canvas
 

@@ -914,7 +914,7 @@ fn open_url(url: &str) -> anyhow::Result<()> {
 }
 
 const TRAY_PANEL_WIDTH: f64 = 336.0;
-const TRAY_PANEL_HEIGHT: f64 = 416.0;
+const TRAY_PANEL_HEIGHT: f64 = 286.0;
 const TRAY_ICON_SIZE: u32 = 32;
 const TRAY_ICON_ON_RGBA: &[u8] = include_bytes!("../icons/haruha-tray-icon-32.rgba");
 const TRAY_ICON_OFF_RGBA: &[u8] = include_bytes!("../icons/haruha-tray-icon-off-32.rgba");
@@ -952,14 +952,17 @@ mod tray_icon_tests {
     }
 
     #[test]
-    fn tray_icon_uses_white_background_and_mode_logo() {
+    fn tray_icon_uses_transparent_background_and_mode_logo() {
         let enabled = build_tray_icon_for_mode(&ProxyMode::Manual);
         let disabled = build_tray_icon_for_mode(&ProxyMode::Off);
 
         assert_eq!((enabled.width(), enabled.height()), (32, 32));
         assert_eq!(pixel(&enabled, 0, 0)[3], 0);
-        assert_eq!(pixel(&enabled, 30, 2), [255, 255, 255, 255]);
-        assert_eq!(pixel(&enabled, 16, 16)[3], 255);
+        assert_eq!(pixel(&enabled, 1, 1)[3], 0);
+        assert_eq!(pixel(&enabled, 30, 2)[3], 0);
+        assert_eq!(pixel(&enabled, 12, 1)[3], 255);
+        assert!(pixel(&enabled, 18, 0)[3] > 0);
+        assert!(pixel(&enabled, 15, 31)[3] > 0);
         assert_ne!(enabled.rgba(), disabled.rgba());
     }
 
