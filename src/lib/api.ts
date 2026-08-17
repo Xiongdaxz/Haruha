@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppLogLevel,
+  DirectIpInfo,
   IpInfo,
   NetworkTrafficSample,
   ProxyMode,
@@ -330,6 +331,16 @@ export async function refreshIpInfo(useProxy: boolean): Promise<IpInfo> {
       : { ip: "203.0.113.45", location: "中国 北京 联通", source: "mock" };
   }
   return invoke<IpInfo>("refresh_ip_info", { useProxy });
+}
+
+export async function refreshDirectIpInfo(): Promise<DirectIpInfo> {
+  if (!isTauri) {
+    return {
+      ipv4: { ip: "203.0.113.45", location: "中国 北京 联通", latencyMs: 84, source: "mock-v4" },
+      ipv6: { ip: "2001:db8:391:c18:1bf::45", location: "中国 浙江 杭州 电信", latencyMs: 112, source: "mock-v6" },
+    };
+  }
+  return invoke<DirectIpInfo>("refresh_direct_ip_info");
 }
 
 export async function openGoogle(): Promise<void> {

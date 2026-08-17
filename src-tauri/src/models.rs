@@ -248,6 +248,13 @@ pub struct IpInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct DirectIpInfo {
+    pub ipv4: Option<IpInfo>,
+    pub ipv6: Option<IpInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct TestResult {
     pub ok: bool,
     pub latency_ms: Option<u128>,

@@ -34,6 +34,8 @@ import { useTrafficMonitor } from "../components/data/TrafficMonitorProvider";
 import { RollingText } from "../components/feedback/RollingText";
 import { formatMbps, getSpeedLevel, speedLevelOptions } from "../lib/format";
 import type {
+  DirectIpFamily,
+  DirectIpInfo,
   IpInfo,
   NetworkTrafficPoint,
   ProxyState,
@@ -53,7 +55,7 @@ interface OverviewPageProps {
   pacUrl: string;
   overviewMode: string;
   animateModeValues: boolean;
-  directIp: IpInfo | null;
+  directIp: DirectIpInfo;
   proxyIp: IpInfo | null;
   proxyRuleCount: number;
   directRuleCount: number;
@@ -123,6 +125,7 @@ export function OverviewPage({
 }: OverviewPageProps) {
   const [isQuickSiteSearchOpen, setQuickSiteSearchOpen] = useState(false);
   const [quickSiteQuery, setQuickSiteQuery] = useState("");
+  const [directIpFamily, setDirectIpFamily] = useState<DirectIpFamily>("ipv4");
   const [speedTestTarget, setSpeedTestTarget] = useState<SpeedTestTarget>(effectiveState.mode === "off" ? "direct" : "proxy");
   const [hasSpeedTargetInteraction, setHasSpeedTargetInteraction] = useState(false);
   const quickSiteSearchRef = useRef<HTMLDivElement>(null);
@@ -144,6 +147,12 @@ export function OverviewPage({
     pendingAutoSpeedTargetRef.current = null;
     setSpeedTestTarget(effectiveState.mode === "off" ? "direct" : "proxy");
   }, [effectiveState.mode]);
+
+  useEffect(() => {
+    if (directIp[directIpFamily]) return;
+    const fallbackFamily: DirectIpFamily = directIpFamily === "ipv4" ? "ipv6" : "ipv4";
+    if (directIp[fallbackFamily]) setDirectIpFamily(fallbackFamily);
+  }, [directIp, directIpFamily]);
 
   useEffect(() => {
     const target = pendingAutoSpeedTargetRef.current;
@@ -232,11 +241,19 @@ export function OverviewPage({
     : latestSpeedResult?.latencyMs;
   const animatedLatencyMs = useAnimatedMetricValue(displayedLatencyMs, shouldResetSpeedMetrics, 260);
   const speedLevel = getSpeedLevel(animatedDownloadMbps);
+  const displayedDirectIp = directIp[directIpFamily] ?? null;
+  const directIpFamilyLabel = directIpFamily === "ipv4" ? "IPv4" : "IPv6";
+  const alternateDirectIpFamily: DirectIpFamily = directIpFamily === "ipv4" ? "ipv6" : "ipv4";
+  const alternateDirectIpFamilyLabel = alternateDirectIpFamily === "ipv4" ? "IPv4" : "IPv6";
+  const canSwitchDirectIpFamily = Boolean(directIp.ipv4 && directIp.ipv6);
+  const isDirectIpRefreshing = busyAction === "refresh-ip" || busyAction === "refresh-direct-ip";
   const isProxyDisabled = effectiveState.mode === "off" || proxyIp?.source === "proxy-disabled";
   const proxySourceText =
     proxyIp?.source && proxyIp.source !== "mock" && !isProxyDisabled ? proxyIp.source : isProxyDisabled ? "代理未启用" : "代理出口";
-  const directLocation = directIp?.location ?? "中国 北京 联通";
-  const directSourceText = directIp?.source && directIp.source !== "mock" ? directIp.source : "本机出口";
+  const directLocation = displayedDirectIp?.location || (isDirectIpRefreshing ? "正在获取位置..." : "位置未知");
+  const directSourceText = displayedDirectIp?.source && !displayedDirectIp.source.startsWith("mock")
+    ? displayedDirectIp.source
+    : `${directIpFamilyLabel}本机出口`;
   const proxyLocation = isProxyDisabled
     ? ""
     : proxyIp?.location || "美国 加利福尼亚州 圣何塞";
@@ -285,7 +302,19 @@ export function OverviewPage({
       </section>
       <section className="panel overview-card ip-overview-card">
         <div className="overview-card-top">
-          <span>我的IP</span>
+          <div className="ip-card-title">
+            <span>我的IP</span>
+            <button
+              aria-label={canSwitchDirectIpFamily ? `切换到${alternateDirectIpFamilyLabel}` : `当前仅检测到${directIpFamilyLabel}`}
+              className="ip-family-toggle"
+              disabled={!canSwitchDirectIpFamily}
+              onClick={() => setDirectIpFamily(alternateDirectIpFamily)}
+              title={canSwitchDirectIpFamily ? `点击切换到${alternateDirectIpFamilyLabel}` : `当前仅检测到${directIpFamilyLabel}`}
+              type="button"
+            >
+              {directIpFamilyLabel}
+            </button>
+          </div>
           <button
             className="overview-card-icon refresh-card-button"
             disabled={busyAction !== null}
@@ -293,14 +322,20 @@ export function OverviewPage({
             title="刷新我的IP"
             type="button"
           >
-            {busyAction === "refresh-direct-ip" ? <Loader2 className="spin" size={18} /> : <MapPin size={18} />}
+            {isDirectIpRefreshing ? <Loader2 className="spin" size={18} /> : <MapPin size={18} />}
           </button>
         </div>
-        <CopyableCardValue fallback="203.0.113.45" label="我的IP" onCopy={onCopy} value={directIp?.ip} variant="main" />
-        <CopyableCardValue label="我的IP位置" onCopy={onCopy} value={directLocation} variant="muted" />
+        <CopyableCardValue
+          fallback={isDirectIpRefreshing ? `正在检测${directIpFamilyLabel}...` : `未检测到${directIpFamilyLabel}`}
+          label={`我的${directIpFamilyLabel}`}
+          onCopy={onCopy}
+          value={displayedDirectIp?.ip}
+          variant="main"
+        />
+        <CopyableCardValue label={`${directIpFamilyLabel}位置`} onCopy={onCopy} value={directLocation} variant="muted" />
         <IpCardMeta
-          copyLabel="我的IP来源"
-          latencyMs={directIp?.latencyMs}
+          copyLabel={`${directIpFamilyLabel}来源`}
+          latencyMs={displayedDirectIp?.latencyMs}
           onCopy={onCopy}
           source={directSourceText}
         />

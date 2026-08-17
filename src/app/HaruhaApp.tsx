@@ -16,6 +16,7 @@ import {
   openConfigDirectory,
   openExternalUrl,
   openGoogle,
+  refreshDirectIpInfo,
   refreshIpInfo,
   runNetworkSpeedTest,
   saveConfiguration,
@@ -25,6 +26,7 @@ import {
 } from "../lib/api";
 import type {
   AppLogLevel,
+  DirectIpInfo,
   IpInfo,
   PacRule,
   ProxyMode,
@@ -168,7 +170,7 @@ export function HaruhaApp() {
   const [speedTestProgress, setSpeedTestProgress] = useState<Partial<Record<SpeedTestTarget, SpeedTestProgress>>>({});
   const [speedTestRunningTarget, setSpeedTestRunningTarget] = useState<SpeedTestTarget | null>(null);
   const [isSpeedSettingsOpen, setSpeedSettingsOpen] = useState(false);
-  const [directIp, setDirectIp] = useState<IpInfo | null>(null);
+  const [directIp, setDirectIp] = useState<DirectIpInfo>({});
   const [proxyIp, setProxyIp] = useState<IpInfo | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingMode, setPendingMode] = useState<ProxyMode | null>(null);
@@ -453,7 +455,7 @@ export function HaruhaApp() {
   async function refreshAllIps() {
     setBusyAction("refresh-ip");
     try {
-      const [direct, proxy] = await Promise.all([refreshIpInfo(false), refreshIpInfo(true)]);
+      const [direct, proxy] = await Promise.all([refreshDirectIpInfo(), refreshIpInfo(true)]);
       setDirectIp(direct);
       setProxyIp(proxy);
       appendLog("DEBUG", "IP信息刷新完成");
@@ -478,7 +480,7 @@ export function HaruhaApp() {
   }
 
   function refreshDirectIp() {
-    void runAction("refresh-direct-ip", () => refreshIpInfo(false), setDirectIp, "本机出口IP已刷新", "本机IP已刷新");
+    void runAction("refresh-direct-ip", refreshDirectIpInfo, setDirectIp, "本机IPv4与IPv6出口已刷新", "本机IP已刷新");
   }
 
   function refreshProxyIp() {
