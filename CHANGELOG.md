@@ -6,6 +6,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [
 
 ## Unreleased
 
+## 0.1.3 - 2026-08-17
+
+### 中文
+
+- 新增本机 IPv4 与 IPv6 出口的并行检测和卡片切换；单一协议不可用时仍可展示另一协议的查询结果。
+
+### English
+
+- Added parallel detection and card switching for direct IPv4 and IPv6 egress; when one protocol is unavailable, the result for the other remains visible.
+
 ## 0.1.2 - 2026-08-17
 
 ### 中文

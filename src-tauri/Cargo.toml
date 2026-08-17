@@ -1,6 +1,6 @@
 [package]
 name = "proxy-manager-next"
-version = "0.1.2"
+version = "0.1.3"
 description = "Cross-platform system proxy manager"
 authors = ["xiaozhuerp"]
 edition = "2021"

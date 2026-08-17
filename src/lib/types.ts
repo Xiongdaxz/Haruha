@@ -59,6 +59,13 @@ export interface IpInfo {
   source: string;
 }
 
+export type DirectIpFamily = "ipv4" | "ipv6";
+
+export interface DirectIpInfo {
+  ipv4?: IpInfo | null;
+  ipv6?: IpInfo | null;
+}
+
 export interface TestResult {
   ok: boolean;
   latencyMs?: number;

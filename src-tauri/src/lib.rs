@@ -24,8 +24,8 @@ mod traffic_monitor;
 
 use config::{append_app_log_line, write_pac_file, ConfigStore};
 use models::{
-    IpInfo, NetworkTrafficSample, ProxyMode, ProxyProfile, ProxyState, SpeedTestConfig,
-    SpeedTestProgress, SpeedTestResult, TestResult, TrafficMonitorCapability,
+    DirectIpInfo, IpInfo, NetworkTrafficSample, ProxyMode, ProxyProfile, ProxyState,
+    SpeedTestConfig, SpeedTestProgress, SpeedTestResult, TestResult, TrafficMonitorCapability,
     TrafficMonitorSnapshot, UnifiedLists,
 };
 use pac_server::PacServer;
@@ -547,6 +547,13 @@ async fn refresh_ip_info(
         store.active_profile()
     };
     net::refresh_ip_info(&profile, use_proxy)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn refresh_direct_ip_info() -> Result<DirectIpInfo, String> {
+    net::refresh_direct_ip_info()
         .await
         .map_err(|error| error.to_string())
 }
@@ -1229,6 +1236,7 @@ pub fn run() {
             disable_proxy,
             set_proxy_mode,
             test_proxy,
+            refresh_direct_ip_info,
             refresh_ip_info,
             run_proxy_speed_test,
             run_direct_speed_test,

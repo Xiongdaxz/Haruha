@@ -1,15 +1,20 @@
-use std::time::{Duration, Instant};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use reqwest::{Client, Proxy};
 use serde::Deserialize;
 
 use crate::models::{
-    IpInfo, ProxyProfile, SpeedTestConfig, SpeedTestProgress, SpeedTestResult, TestResult,
+    DirectIpInfo, IpInfo, ProxyProfile, SpeedTestConfig, SpeedTestProgress, SpeedTestResult,
+    TestResult,
 };
 
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 const SPEED_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+const IP_FAMILY_QUERY_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Deserialize)]
 struct IpifyResponse {
@@ -48,6 +53,28 @@ struct IfconfigResponse {
     city: Option<String>,
     region_name: Option<String>,
     country: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IpFamily {
+    Ipv4,
+    Ipv6,
+}
+
+impl IpFamily {
+    fn local_address(self) -> IpAddr {
+        match self {
+            Self::Ipv4 => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            Self::Ipv6 => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ipv4 => "IPv4",
+            Self::Ipv6 => "IPv6",
+        }
+    }
 }
 
 pub async fn test_proxy(profile: &ProxyProfile) -> TestResult {
@@ -117,6 +144,96 @@ pub async fn refresh_ip_info(profile: &ProxyProfile, use_proxy: bool) -> Result<
         fetch_proxy_ip_info(&client, started).await
     } else {
         fetch_direct_ip_info(&client, started).await
+    }
+}
+
+pub async fn refresh_direct_ip_info() -> Result<DirectIpInfo> {
+    let ipv4_task = tokio::spawn(fetch_direct_ip_family_with_timeout(IpFamily::Ipv4));
+    let ipv6_task = tokio::spawn(fetch_direct_ip_family_with_timeout(IpFamily::Ipv6));
+    let ipv4 = ipv4_task.await.context("IPv4查询任务异常")?;
+    let ipv6 = ipv6_task.await.context("IPv6查询任务异常")?;
+
+    if ipv4.is_err() && ipv6.is_err() {
+        anyhow::bail!(
+            "IPv4与IPv6查询均失败：IPv4: {}; IPv6: {}",
+            ipv4.as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            ipv6.as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        );
+    }
+
+    Ok(DirectIpInfo {
+        ipv4: ipv4.ok(),
+        ipv6: ipv6.ok(),
+    })
+}
+
+async fn fetch_direct_ip_family_with_timeout(family: IpFamily) -> Result<IpInfo> {
+    tokio::time::timeout(IP_FAMILY_QUERY_TIMEOUT, fetch_direct_ip_family(family))
+        .await
+        .with_context(|| format!("{}查询超时", family.label()))?
+}
+
+async fn fetch_direct_ip_family(family: IpFamily) -> Result<IpInfo> {
+    let client = Client::builder()
+        .no_proxy()
+        .local_address(family.local_address())
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let started = Instant::now();
+
+    match family {
+        IpFamily::Ipv4 => {
+            if let Ok(info) = fetch_tencent_ip2city(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_myip_ipip(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_ipwhois(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_ipinfo(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            ensure_ip_family(fetch_ipify(&client, started).await?, family)
+        }
+        IpFamily::Ipv6 => {
+            if let Ok(info) = fetch_myip_ipip(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_ipwhois(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_ipinfo(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            if let Ok(info) = fetch_ifconfig(&client, started).await {
+                if let Ok(info) = ensure_ip_family(info, family) {
+                    return Ok(info);
+                }
+            }
+            ensure_ip_family(fetch_ipify_v6(&client, started).await?, family)
+        }
     }
 }
 
@@ -404,8 +521,33 @@ async fn fetch_ifconfig(client: &Client, started: Instant) -> Result<IpInfo> {
 }
 
 async fn fetch_ipify(client: &Client, started: Instant) -> Result<IpInfo> {
+    fetch_ipify_endpoint(
+        client,
+        started,
+        "https://api.ipify.org?format=json",
+        "api.ipify.org",
+    )
+    .await
+}
+
+async fn fetch_ipify_v6(client: &Client, started: Instant) -> Result<IpInfo> {
+    fetch_ipify_endpoint(
+        client,
+        started,
+        "https://api6.ipify.org?format=json",
+        "api6.ipify.org",
+    )
+    .await
+}
+
+async fn fetch_ipify_endpoint(
+    client: &Client,
+    started: Instant,
+    url: &str,
+    source: &str,
+) -> Result<IpInfo> {
     let response = client
-        .get("https://api.ipify.org?format=json")
+        .get(url)
         .send()
         .await
         .context("获取IP信息失败")?
@@ -417,7 +559,7 @@ async fn fetch_ipify(client: &Client, started: Instant) -> Result<IpInfo> {
         ip: response.ip,
         location: "位置未知".to_string(),
         latency_ms: Some(started.elapsed().as_millis()),
-        source: "api.ipify.org".to_string(),
+        source: source.to_string(),
     })
 }
 
@@ -472,6 +614,21 @@ fn join_location(parts: impl IntoIterator<Item = Option<String>>, separator: &st
     }
 }
 
+fn ensure_ip_family(info: IpInfo, family: IpFamily) -> Result<IpInfo> {
+    let parsed = info
+        .ip
+        .parse::<IpAddr>()
+        .with_context(|| format!("{} 返回了无效IP：{}", info.source, info.ip))?;
+    let matches = matches!(
+        (family, parsed),
+        (IpFamily::Ipv4, IpAddr::V4(_)) | (IpFamily::Ipv6, IpAddr::V6(_))
+    );
+    if !matches {
+        anyhow::bail!("{} 未返回{}地址", info.source, family.label());
+    }
+    Ok(info)
+}
+
 fn is_http_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
@@ -489,5 +646,32 @@ fn speed_failure(started: Instant, message: &str) -> SpeedTestResult {
         downloaded_bytes: None,
         duration_ms: started.elapsed().as_millis(),
         message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(ip: &str) -> IpInfo {
+        IpInfo {
+            ip: ip.to_string(),
+            location: "位置未知".to_string(),
+            latency_ms: None,
+            source: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn accepts_only_the_requested_ip_family() {
+        assert!(ensure_ip_family(info("203.0.113.8"), IpFamily::Ipv4).is_ok());
+        assert!(ensure_ip_family(info("2001:db8::8"), IpFamily::Ipv6).is_ok());
+        assert!(ensure_ip_family(info("2001:db8::8"), IpFamily::Ipv4).is_err());
+        assert!(ensure_ip_family(info("203.0.113.8"), IpFamily::Ipv6).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_ip_values() {
+        assert!(ensure_ip_family(info("not-an-ip"), IpFamily::Ipv4).is_err());
     }
 }
