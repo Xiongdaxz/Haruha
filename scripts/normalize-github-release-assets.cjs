@@ -12,60 +12,102 @@ function buildAssetDefinitions(tag) {
 
   return [
     {
-      source: "01-" + prefix + "Windows-x64-Portable.exe",
-      target: "01-" + prefix + "Windows-x64-Portable.exe",
+      sources: [
+        prefix + "Windows-x64-Portable.exe",
+        "01-" + prefix + "Windows-x64-Portable.exe",
+      ],
+      target: prefix + "Windows-x64-Portable.exe",
     },
     {
-      source: "Haruha_" + version + "_x64-setup.exe",
-      target: "02-" + prefix + "Windows-x64-NSIS-Setup.exe",
+      sources: [
+        "Haruha_" + version + "_x64-setup.exe",
+        "02-" + prefix + "Windows-x64-NSIS-Setup.exe",
+      ],
+      target: prefix + "Windows-x64-NSIS-Setup.exe",
     },
     {
-      source: "Haruha_" + version + "_x64_zh-CN.msi",
-      target: "03-" + prefix + "Windows-x64-MSI-zh-CN.msi",
+      sources: [
+        "Haruha_" + version + "_x64_zh-CN.msi",
+        "03-" + prefix + "Windows-x64-MSI-zh-CN.msi",
+      ],
+      target: prefix + "Windows-x64-MSI-zh-CN.msi",
     },
     {
-      source: "04-" + prefix + "Windows-ARM64-Portable.exe",
-      target: "04-" + prefix + "Windows-ARM64-Portable.exe",
+      sources: [
+        prefix + "Windows-ARM64-Portable.exe",
+        "04-" + prefix + "Windows-ARM64-Portable.exe",
+      ],
+      target: prefix + "Windows-ARM64-Portable.exe",
     },
     {
-      source: "Haruha_" + version + "_arm64-setup.exe",
-      target: "05-" + prefix + "Windows-ARM64-NSIS-Setup.exe",
+      sources: [
+        "Haruha_" + version + "_arm64-setup.exe",
+        "05-" + prefix + "Windows-ARM64-NSIS-Setup.exe",
+      ],
+      target: prefix + "Windows-ARM64-NSIS-Setup.exe",
     },
     {
-      source: "Haruha_" + version + "_arm64_zh-CN.msi",
-      target: "06-" + prefix + "Windows-ARM64-MSI-zh-CN.msi",
+      sources: [
+        "Haruha_" + version + "_arm64_zh-CN.msi",
+        "06-" + prefix + "Windows-ARM64-MSI-zh-CN.msi",
+      ],
+      target: prefix + "Windows-ARM64-MSI-zh-CN.msi",
     },
     {
-      source: "Haruha_" + version + "_universal.dmg",
-      target: "07-" + prefix + "macOS-Universal.dmg",
+      sources: [
+        "Haruha_" + version + "_universal.dmg",
+        "07-" + prefix + "macOS-Universal.dmg",
+      ],
+      target: prefix + "macOS-Universal.dmg",
     },
     {
-      source: "Haruha_universal.app.tar.gz",
-      target: "08-" + prefix + "macOS-Universal-App.tar.gz",
+      sources: [
+        "Haruha_universal.app.tar.gz",
+        "08-" + prefix + "macOS-Universal-App.tar.gz",
+      ],
+      target: prefix + "macOS-Universal-App.tar.gz",
     },
     {
-      source: "Haruha_" + version + "_amd64.AppImage",
-      target: "09-" + prefix + "Linux-x64.AppImage",
+      sources: [
+        "Haruha_" + version + "_amd64.AppImage",
+        "09-" + prefix + "Linux-x64.AppImage",
+      ],
+      target: prefix + "Linux-x64.AppImage",
     },
     {
-      source: "Haruha_" + version + "_amd64.deb",
-      target: "10-" + prefix + "Linux-x64.deb",
+      sources: [
+        "Haruha_" + version + "_amd64.deb",
+        "10-" + prefix + "Linux-x64.deb",
+      ],
+      target: prefix + "Linux-x64.deb",
     },
     {
-      source: "Haruha-" + version + "-1.x86_64.rpm",
-      target: "11-" + prefix + "Linux-x64.rpm",
+      sources: [
+        "Haruha-" + version + "-1.x86_64.rpm",
+        "11-" + prefix + "Linux-x64.rpm",
+      ],
+      target: prefix + "Linux-x64.rpm",
     },
     {
-      source: "Haruha_" + version + "_aarch64.AppImage",
-      target: "12-" + prefix + "Linux-ARM64.AppImage",
+      sources: [
+        "Haruha_" + version + "_aarch64.AppImage",
+        "12-" + prefix + "Linux-ARM64.AppImage",
+      ],
+      target: prefix + "Linux-ARM64.AppImage",
     },
     {
-      source: "Haruha_" + version + "_arm64.deb",
-      target: "13-" + prefix + "Linux-ARM64.deb",
+      sources: [
+        "Haruha_" + version + "_arm64.deb",
+        "13-" + prefix + "Linux-ARM64.deb",
+      ],
+      target: prefix + "Linux-ARM64.deb",
     },
     {
-      source: "Haruha-" + version + "-1.aarch64.rpm",
-      target: "14-" + prefix + "Linux-ARM64.rpm",
+      sources: [
+        "Haruha-" + version + "-1.aarch64.rpm",
+        "14-" + prefix + "Linux-ARM64.rpm",
+      ],
+      target: prefix + "Linux-ARM64.rpm",
     },
   ];
 }
@@ -74,25 +116,31 @@ function planAssetRenames(tag, assetNames) {
   const definitions = buildAssetDefinitions(tag);
   const names = new Set(assetNames);
   const knownNames = new Set(
-    definitions.flatMap(({ source, target }) => [source, target]),
+    definitions.flatMap(({ sources, target }) => [...sources, target]),
   );
   const renames = [];
   const missing = [];
   const conflicts = [];
 
   for (const definition of definitions) {
-    const hasSource = names.has(definition.source);
     const hasTarget = names.has(definition.target);
+    const presentSources = [
+      ...new Set(
+        definition.sources.filter(
+          (source) => source !== definition.target && names.has(source),
+        ),
+      ),
+    ];
 
-    if (definition.source === definition.target) {
-      if (!hasTarget) {
-        missing.push(definition);
-      }
-    } else if (hasSource && hasTarget) {
+    if (hasTarget && presentSources.length > 0) {
       conflicts.push(definition);
-    } else if (hasSource) {
-      renames.push(definition);
-    } else if (!hasTarget) {
+    } else if (hasTarget) {
+      continue;
+    } else if (presentSources.length === 1) {
+      renames.push({ source: presentSources[0], target: definition.target });
+    } else if (presentSources.length > 1) {
+      conflicts.push(definition);
+    } else {
       missing.push(definition);
     }
   }
@@ -188,7 +236,7 @@ function createReleaseBody(tag, changelogSource) {
   return [
     "### 中文",
     "",
-    "Haruha " + tag + " 已完成自动构建并公开发布。资产按 Windows、macOS、Linux 和架构固定排序，文件名已明确标注平台与安装包格式。",
+    "Haruha " + tag + " 已完成自动构建并公开发布。资产按平台与架构分组，文件名不使用序号前缀，并明确标注平台、架构与安装包格式。",
     "",
     "#### 更新内容",
     "",
@@ -210,7 +258,7 @@ function createReleaseBody(tag, changelogSource) {
     "",
     "### English",
     "",
-    "Haruha " + tag + " has completed automated builds and is now publicly available. Assets use a stable Windows, macOS, and Linux order, with platform, architecture, and package format stated explicitly in every filename.",
+    "Haruha " + tag + " has completed automated builds and is now publicly available. Assets are grouped by platform and architecture without numeric filename prefixes, with platform, architecture, and package format stated explicitly in every filename.",
     "",
     "#### What's changed",
     "",
@@ -240,12 +288,14 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
     repo: context.repo.repo,
     per_page: 100,
   });
-  const release = releases.find(
-    (candidate) => candidate.draft && candidate.tag_name === tag,
-  );
+  const release = releases.find((candidate) => candidate.tag_name === tag);
 
   if (!release) {
-    throw new Error("Draft release not found for tag " + tag + ".");
+    if (process.env.ALLOW_MISSING_RELEASE === "true") {
+      core.info("Release not found for " + tag + "; nothing to refresh.");
+      return;
+    }
+    throw new Error("Release not found for tag " + tag + ".");
   }
 
   const releaseAssets = await github.paginate(

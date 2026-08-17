@@ -19,8 +19,9 @@ async function testBilingualReleaseNotes() {
   assert.match(body, /### English/);
   assert.match(body, /#### 更新内容/);
   assert.match(body, /#### What's changed/);
-  assert.match(body, /01-Haruha-v0\.1\.2-Windows-x64-Portable\.exe/);
-  assert.match(body, /14-Haruha-v0\.1\.2-Linux-ARM64\.rpm/);
+  assert.match(body, /Haruha-v0\.1\.2-Windows-x64-Portable\.exe/);
+  assert.match(body, /Haruha-v0\.1\.2-Linux-ARM64\.rpm/);
+  assert.doesNotMatch(body, /\b(?:0[1-9]|1[0-4])-Haruha-/);
   assert.match(body, /默认未签名/);
   assert.match(body, /unsigned by default/);
 }
@@ -29,9 +30,9 @@ async function testAutomaticLatestPublication() {
   const tag = "v0.1.2";
   const definitions = normalizeRelease.buildAssetDefinitions(tag);
   const release = { id: 12, draft: true, tag_name: tag };
-  const assets = definitions.map(({ source }, index) => ({
+  const assets = definitions.map(({ sources }, index) => ({
     id: index + 100,
-    name: source,
+    name: sources[0],
   }));
   const renamed = [];
   let updateReleaseInput;
@@ -68,9 +69,25 @@ async function testAutomaticLatestPublication() {
   assert.match(updateReleaseInput.body, /Haruha v0\.1\.2/);
 }
 
+function testLegacyNumberedAssetRenames() {
+  const tag = "v0.1.2";
+  const definitions = normalizeRelease.buildAssetDefinitions(tag);
+  const legacyNames = definitions.map(
+    ({ sources }) => sources[sources.length - 1],
+  );
+  const plan = normalizeRelease.planAssetRenames(tag, legacyNames);
+
+  assert.equal(plan.missing.length, 0);
+  assert.equal(plan.conflicts.length, 0);
+  assert.equal(plan.unexpected.length, 0);
+  assert.equal(plan.renames.length, 14);
+  assert.ok(plan.renames.every(({ target }) => !/^\d{2}-/.test(target)));
+}
+
 async function main() {
   await testBilingualReleaseNotes();
   await testAutomaticLatestPublication();
+  testLegacyNumberedAssetRenames();
   console.log("Release automation tests passed.");
 }
 

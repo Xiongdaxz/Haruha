@@ -2,12 +2,14 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing draft release tag to normalize
+        description: Existing release tag to normalize
         required: true
         default: v0.1.2
 
@@ -21,7 +23,7 @@ concurrency:
 jobs:
   build:
     name: Package ${{ matrix.name }}
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -131,11 +133,11 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if ("${{ matrix.name }}" -eq "Windows ARM64") {
             $source = "src-tauri/target/aarch64-pc-windows-msvc/release/Haruha.exe"
-            $assetName = "04-Haruha-" + $tag + "-Windows-ARM64-Portable.exe"
+            $assetName = "Haruha-" + $tag + "-Windows-ARM64-Portable.exe"
           }
           else {
             $source = "src-tauri/target/release/Haruha.exe"
-            $assetName = "01-Haruha-" + $tag + "-Windows-x64-Portable.exe"
+            $assetName = "Haruha-" + $tag + "-Windows-x64-Portable.exe"
           }
           $destination = Join-Path $env:RUNNER_TEMP $assetName
           Copy-Item -LiteralPath $source -Destination $destination
@@ -153,12 +155,10 @@ jobs:
           - name: Windows x64
             rust_target: ""
             executable_path: src-tauri/target/release/Haruha.exe
-            asset_order: "01"
             asset_arch: x64
           - name: Windows ARM64
             rust_target: aarch64-pc-windows-msvc
             executable_path: src-tauri/target/aarch64-pc-windows-msvc/release/Haruha.exe
-            asset_order: "04"
             asset_arch: ARM64
 
     steps:
@@ -205,13 +205,13 @@ jobs:
             throw "Portable build failed with exit code $LASTEXITCODE."
           }
 
-      - name: Attach portable executable to draft release
+      - name: Attach portable executable to release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ inputs.tag }}"
-          $assetName = "${{ matrix.asset_order }}-Haruha-" + $tag + "-Windows-${{ matrix.asset_arch }}-Portable.exe"
+          $assetName = "Haruha-" + $tag + "-Windows-${{ matrix.asset_arch }}-Portable.exe"
           $destination = Join-Path $env:RUNNER_TEMP $assetName
           Copy-Item -LiteralPath "${{ matrix.executable_path }}" -Destination $destination
           gh release upload $tag $destination --repo $env:GITHUB_REPOSITORY --clobber
@@ -219,7 +219,7 @@ jobs:
   normalize-release:
     name: Normalize assets, notes, and publish Latest
     needs: [build, windows_portable]
-    if: ${{ always() && ((github.event_name == 'push' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.windows_portable.result == 'success')) }}
+    if: ${{ always() && ((github.event_name == 'push' && github.ref_type == 'tag' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.windows_portable.result == 'success')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -230,6 +230,28 @@ jobs:
         uses: actions/github-script@v8
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        with:
+          script: |
+            const normalizeRelease = require("./scripts/normalize-github-release-assets.cjs");
+            await normalizeRelease({ github, context, core });
+
+  refresh-existing-release:
+    name: Refresh existing release asset names
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v5
+
+      - name: Resolve current version tag
+        shell: bash
+        run: echo "RELEASE_TAG=v$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Normalize existing published release
+        uses: actions/github-script@v8
+        env:
+          ALLOW_MISSING_RELEASE: "true"
         with:
           script: |
             const normalizeRelease = require("./scripts/normalize-github-release-assets.cjs");
