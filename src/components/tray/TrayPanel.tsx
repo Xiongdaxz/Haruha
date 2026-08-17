@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  Check,
-  ExternalLink,
   LogOut,
-  MonitorUp,
   Power,
 } from "lucide-react";
 import logo from "../../assets/haruha-tray-logo.png";
@@ -16,10 +13,8 @@ import {
   getProxyState,
   hideTrayPanel,
   listenProxyStateChanged,
-  openGoogle,
   quitFromTray,
   setProxyMode,
-  showMainWindowFromTray,
 } from "../../lib/api";
 import type { ProxyMode, ProxyProfile, ProxyState } from "../../lib/types";
 import { useThemePreference } from "../../hooks/useThemePreference";
@@ -27,20 +22,20 @@ import { useThemePreference } from "../../hooks/useThemePreference";
 const modeMeta = {
   manual: {
     label: "手动代理",
-    description: "全部流量通过代理服务器",
+    shortLabel: "手动",
     icon: ProxyIcon,
   },
   pac: {
     label: "PAC 自动代理",
-    description: DEFAULT_PAC_URL,
+    shortLabel: "自动",
     icon: PacIcon,
   },
   off: {
     label: "关闭代理",
-    description: "恢复系统默认网络连接",
+    shortLabel: "关闭",
     icon: Power,
   },
-} satisfies Record<ProxyMode, { label: string; description: string; icon: typeof Power }>;
+} satisfies Record<ProxyMode, { label: string; shortLabel: string; icon: typeof Power }>;
 
 const modes: ProxyMode[] = ["manual", "pac", "off"];
 
@@ -56,6 +51,7 @@ export function TrayPanel() {
   const [profile, setProfile] = useState<ProxyProfile>(defaultProfile);
   const [proxyState, setProxyState] = useState<ProxyState | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [hasModeInteraction, setHasModeInteraction] = useState(false);
   const [isThemeTransitioning, setThemeTransitioning] = useState(false);
   const themeTransitionTimer = useRef<number | undefined>(undefined);
   const queuedModeChangeRef = useRef<QueuedModeChange | null>(null);
@@ -120,6 +116,7 @@ export function TrayPanel() {
   }, []);
 
   const activeMode = proxyState?.mode ?? profile.mode;
+  const activeModeIndex = modes.indexOf(activeMode);
   const pacUrl = proxyState?.pacUrl ?? DEFAULT_PAC_URL;
   const status = useMemo(() => {
     if (activeMode === "manual") {
@@ -137,6 +134,7 @@ export function TrayPanel() {
   function switchMode(mode: ProxyMode) {
     if (mode === requestedModeRef.current) return;
 
+    setHasModeInteraction(true);
     modeChangeRequestIdRef.current += 1;
     requestedModeRef.current = mode;
     queuedModeChangeRef.current = {
@@ -212,14 +210,6 @@ export function TrayPanel() {
     }
   }
 
-  async function openMainWindow() {
-    await showMainWindowFromTray();
-  }
-
-  async function openGoogleFromTray() {
-    await openGoogle();
-  }
-
   function selectTheme(theme: ThemePreference) {
     if (theme === themePreference) return;
     if (themeTransitionTimer.current !== undefined) window.clearTimeout(themeTransitionTimer.current);
@@ -229,6 +219,24 @@ export function TrayPanel() {
       setThemeTransitioning(false);
       themeTransitionTimer.current = undefined;
     }, 320);
+  }
+
+  function handleModeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (activeModeIndex - 1 + modes.length) % modes.length;
+    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (activeModeIndex + 1) % modes.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = modes.length - 1;
+    }
+    if (nextIndex === undefined) return;
+
+    event.preventDefault();
+    switchMode(modes[nextIndex]);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[nextIndex]?.focus();
   }
 
   function handleThemeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -270,30 +278,43 @@ export function TrayPanel() {
 
         <div className="tray-mode-section">
           <p className="tray-section-label">代理模式</p>
-          <div className="tray-mode-list" role="radiogroup" aria-label="选择代理模式">
+          <div
+            className={`tray-mode-list mode-${activeMode}${hasModeInteraction ? " is-animating" : ""}`}
+            role="radiogroup"
+            aria-label="选择代理模式"
+            onKeyDown={handleModeKeyDown}
+            style={
+              {
+                "--tray-mode-count": modes.length,
+                "--tray-mode-index": activeModeIndex,
+              } as CSSProperties
+            }
+          >
+            <span className="tray-mode-indicator" aria-hidden="true" />
             {modes.map((mode) => {
               const item = modeMeta[mode];
               const Icon = item.icon;
               const isActive = mode === activeMode;
+              const detail =
+                mode === "manual"
+                  ? `${profile.host}:${profile.port}`
+                  : mode === "pac"
+                    ? pacUrl
+                    : "恢复系统默认网络连接";
               return (
                 <button
                   type="button"
-                  className={`tray-mode-option${isActive ? " is-active" : ""}${mode === "off" ? " is-off" : ""}`}
+                  className={isActive ? "tray-mode-option is-active" : "tray-mode-option"}
                   role="radio"
                   aria-checked={isActive}
+                  aria-label={`${item.label}：${detail}`}
                   key={mode}
                   onClick={() => switchMode(mode)}
+                  tabIndex={isActive ? 0 : -1}
+                  title={`${item.label} · ${detail}`}
                 >
-                  <span className="tray-mode-icon" aria-hidden="true"><Icon size={18} strokeWidth={2} /></span>
-                  <span className="tray-mode-copy">
-                    <strong>{item.label}</strong>
-                    <small title={mode === "pac" ? pacUrl : undefined}>
-                      {mode === "manual" ? `${profile.host}:${profile.port}` : mode === "pac" ? pacUrl : item.description}
-                    </small>
-                  </span>
-                  <span className="tray-mode-check" aria-hidden="true">
-                    {isActive ? <Check size={16} strokeWidth={2.6} /> : null}
-                  </span>
+                  <Icon aria-hidden="true" size={15} strokeWidth={2.1} />
+                  <span>{item.shortLabel}</span>
                 </button>
               );
             })}
@@ -335,17 +356,6 @@ export function TrayPanel() {
               );
             })}
           </div>
-        </div>
-
-        <div className="tray-shortcuts">
-          <button type="button" onClick={() => void openMainWindow()}>
-            <MonitorUp size={17} aria-hidden="true" />
-            打开主界面
-          </button>
-          <button type="button" onClick={() => void openGoogleFromTray()}>
-            <ExternalLink size={17} aria-hidden="true" />
-            打开 Google
-          </button>
         </div>
 
         <footer className="tray-panel-footer">

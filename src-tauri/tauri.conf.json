@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Haruha",
   "mainBinaryName": "Haruha",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.xiaozhuerp.proxy-manager-next",
   "build": {
     "beforeDevCommand": "bun run dev",

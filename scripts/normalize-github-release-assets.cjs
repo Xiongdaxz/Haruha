@@ -1,3 +1,5 @@
+const { readFile } = require("node:fs/promises");
+
 const TAG_PATTERN = /^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
 function buildAssetDefinitions(tag) {
@@ -108,13 +110,89 @@ function code(filename) {
   return "<code>" + filename + "</code>";
 }
 
-function createReleaseBody(tag) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractChangelogEntries(changelogSource, tag) {
+  if (!TAG_PATTERN.test(tag)) {
+    throw new Error("Invalid release tag: " + tag);
+  }
+
+  const normalizedSource = changelogSource.replace(/\r\n/g, "\n");
+  const version = tag.slice(1);
+  const headerPattern = new RegExp(
+    "^##\\s+" + escapeRegExp(version) + "\\s+-\\s+\\d{4}-\\d{2}-\\d{2}\\s*$",
+    "m",
+  );
+  const headerMatch = normalizedSource.match(headerPattern);
+  if (!headerMatch || headerMatch.index === undefined) {
+    throw new Error("Changelog section not found for " + tag + ".");
+  }
+
+  const afterHeader = normalizedSource.slice(
+    headerMatch.index + headerMatch[0].length,
+  );
+  const nextVersionIndex = afterHeader.search(/^##\s+/m);
+  const versionSection =
+    nextVersionIndex >= 0 ? afterHeader.slice(0, nextVersionIndex) : afterHeader;
+
+  function entriesFor(heading) {
+    const headingPattern = new RegExp(
+      "^###\\s+" + escapeRegExp(heading) + "\\s*$",
+      "m",
+    );
+    const headingMatch = versionSection.match(headingPattern);
+    if (!headingMatch || headingMatch.index === undefined) {
+      throw new Error(
+        "Changelog heading " + heading + " not found for " + tag + ".",
+      );
+    }
+
+    const afterHeading = versionSection.slice(
+      headingMatch.index + headingMatch[0].length,
+    );
+    const nextHeadingIndex = afterHeading.search(/^###\s+/m);
+    const headingBody =
+      nextHeadingIndex >= 0
+        ? afterHeading.slice(0, nextHeadingIndex)
+        : afterHeading;
+    return headingBody
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(2));
+  }
+
+  const chinese = entriesFor("中文");
+  const english = entriesFor("English");
+  if (chinese.length === 0 || chinese.length !== english.length) {
+    throw new Error(
+      "Changelog entries must be non-empty and paired for " +
+        tag +
+        ": Chinese=" +
+        chinese.length +
+        ", English=" +
+        english.length +
+        ".",
+    );
+  }
+
+  return { chinese, english };
+}
+
+function createReleaseBody(tag, changelogSource) {
   const assets = buildAssetDefinitions(tag).map(({ target }) => target);
+  const changelog = extractChangelogEntries(changelogSource, tag);
 
   return [
     "### 中文",
     "",
-    "这是 Haruha " + tag + " 的待审核草稿。资产按 Windows、macOS、Linux 和架构固定排序，文件名已明确标注平台与安装包格式。",
+    "Haruha " + tag + " 已完成自动构建并公开发布。资产按 Windows、macOS、Linux 和架构固定排序，文件名已明确标注平台与安装包格式。",
+    "",
+    "#### 更新内容",
+    "",
+    ...changelog.chinese.map((entry) => "- " + entry),
     "",
     "#### 下载说明",
     "",
@@ -132,7 +210,11 @@ function createReleaseBody(tag) {
     "",
     "### English",
     "",
-    "This is the review draft for Haruha " + tag + ". Assets use a stable Windows, macOS, and Linux order, with platform, architecture, and package format stated explicitly in every filename.",
+    "Haruha " + tag + " has completed automated builds and is now publicly available. Assets use a stable Windows, macOS, and Linux order, with platform, architecture, and package format stated explicitly in every filename.",
+    "",
+    "#### What's changed",
+    "",
+    ...changelog.english.map((entry) => "- " + entry),
     "",
     "#### Downloads",
     "",
@@ -152,6 +234,7 @@ function createReleaseBody(tag) {
 
 async function normalizeGithubReleaseAssets({ github, context, core }) {
   const tag = process.env.RELEASE_TAG;
+  const changelogSource = await readFile("CHANGELOG.md", "utf8");
   const releases = await github.paginate(github.rest.repos.listReleases, {
     owner: context.repo.owner,
     repo: context.repo.repo,
@@ -215,15 +298,16 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
     release_id: release.id,
     tag_name: tag,
     name: "Haruha " + tag,
-    body: createReleaseBody(tag),
-    draft: true,
+    body: createReleaseBody(tag, changelogSource),
+    draft: false,
     prerelease: false,
+    make_latest: "true",
   });
 
   core.info(
-    "Normalized " +
+    "Normalized and published " +
       plan.definitions.length +
-      " assets for draft release " +
+      " assets for release " +
       tag +
       ".",
   );
@@ -232,4 +316,5 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
 module.exports = normalizeGithubReleaseAssets;
 module.exports.buildAssetDefinitions = buildAssetDefinitions;
 module.exports.planAssetRenames = planAssetRenames;
+module.exports.extractChangelogEntries = extractChangelogEntries;
 module.exports.createReleaseBody = createReleaseBody;

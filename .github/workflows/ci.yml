@@ -33,6 +33,9 @@ jobs:
       - name: Verify release version consistency
         run: bun run release:verify-version
 
+      - name: Test release automation
+        run: bun run test:release
+
       - name: TypeScript check
         run: bun run check
 

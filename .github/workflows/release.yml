@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing draft release tag to normalize
         required: true
-        default: v0.1.1
+        default: v0.1.2
 
 permissions:
   contents: write
@@ -217,7 +217,7 @@ jobs:
           gh release upload $tag $destination --repo $env:GITHUB_REPOSITORY --clobber
 
   normalize-release:
-    name: Normalize draft asset names and release notes
+    name: Normalize assets, notes, and publish Latest
     needs: [build, windows_portable]
     if: ${{ always() && ((github.event_name == 'push' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.windows_portable.result == 'success')) }}
     runs-on: ubuntu-22.04
@@ -226,7 +226,7 @@ jobs:
       - name: Checkout release tooling
         uses: actions/checkout@v5
 
-      - name: Normalize draft release
+      - name: Normalize and publish release
         uses: actions/github-script@v8
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

@@ -17,10 +17,13 @@ use crate::{
 
 const CONFIG_DIR_NAME: &str = "Haruha";
 const LEGACY_PROJECT_CONFIG_DIR_NAME: &str = "proxy-manager-next";
+const CURRENT_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default)]
+    pub schema_version: u32,
     pub active_profile_id: String,
     pub profiles: Vec<ProxyProfile>,
     #[serde(default)]
@@ -31,6 +34,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         let profile = default_profile();
         Self {
+            schema_version: CURRENT_CONFIG_SCHEMA_VERSION,
             active_profile_id: profile.id.clone(),
             profiles: vec![profile],
             unified_lists: UnifiedLists::default(),
@@ -51,7 +55,10 @@ impl ConfigStore {
         let path = dir.join("config.json");
 
         if !path.exists() {
-            if let Some(config) = migrate_legacy_config()? {
+            if let Some(mut config) = migrate_legacy_config()? {
+                let _ = migrate_profile_rules_to_unified(&mut config);
+                let _ = migrate_config_schema(&mut config);
+                let _ = sanitize_config(&mut config);
                 let store = Self { path, config };
                 store.save()?;
                 return Ok(store);
@@ -65,9 +72,10 @@ impl ConfigStore {
         };
 
         let migrated = migrate_profile_rules_to_unified(&mut config);
+        let schema_migrated = migrate_config_schema(&mut config);
         let sanitized = sanitize_config(&mut config);
         let store = Self { path, config };
-        if migrated || sanitized {
+        if migrated || schema_migrated || sanitized {
             store.save()?;
         }
 
@@ -449,6 +457,7 @@ fn convert_legacy(legacy: LegacyConfig) -> AppConfig {
     }
 
     AppConfig {
+        schema_version: 0,
         active_profile_id: profile.id.clone(),
         profiles: vec![profile],
         unified_lists: unified,
@@ -651,6 +660,25 @@ fn is_retired_default_bypass_rule(rule: &str) -> bool {
     normalize_domain_rule(rule) == "looklookfactory.com"
 }
 
+/// 旧版本曾内置 `looklookfactory.com` 直连规则。只在读取无版本号的历史配置时
+/// 清理一次；迁移完成后允许用户重新添加同名规则。
+fn migrate_config_schema(config: &mut AppConfig) -> bool {
+    if config.schema_version >= CURRENT_CONFIG_SCHEMA_VERSION {
+        return false;
+    }
+
+    config
+        .unified_lists
+        .direct_domains
+        .retain(|rule| !is_retired_default_bypass_rule(rule));
+    config
+        .unified_lists
+        .disabled_direct_domains
+        .retain(|rule| !is_retired_default_bypass_rule(rule));
+    config.schema_version = CURRENT_CONFIG_SCHEMA_VERSION;
+    true
+}
+
 /// 归一化统一名单：去空、去重。按规则类型分别处理：
 /// - Domain：归一化（去除 `*.` / `.` 前缀，转小写）
 /// - Cidr / Glob：仅 trim + 转小写，保留原始语法
@@ -658,10 +686,7 @@ fn is_retired_default_bypass_rule(rule: &str) -> bool {
 fn sanitize_unified_lists(lists: &mut UnifiedLists) -> bool {
     let before = lists.clone();
 
-    lists.direct_domains = dedupe_unified_rules(&lists.direct_domains)
-        .into_iter()
-        .filter(|rule| !is_retired_default_bypass_rule(rule))
-        .collect();
+    lists.direct_domains = dedupe_unified_rules(&lists.direct_domains);
     lists.proxy_domains = dedupe_unified_rules(&lists.proxy_domains);
     lists.disabled_direct_domains = dedupe_unified_rules(&lists.disabled_direct_domains)
         .into_iter()
@@ -717,9 +742,10 @@ fn path_exists(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_path, convert_legacy, migrate_profile_rules_to_unified,
+        backup_path, convert_legacy, migrate_config_schema, migrate_profile_rules_to_unified,
         migrate_project_named_config_dir_from, parse_legacy_bypass, read_config_with_recovery,
         sanitize_unified_lists, save_config_atomically, AppConfig, ConfigStore, LegacyConfig,
+        CURRENT_CONFIG_SCHEMA_VERSION,
     };
     use crate::models::{default_profile, PacRule, PacStrategy, ProxyMode, UnifiedLists};
     use std::{fs, time::SystemTime};
@@ -883,16 +909,36 @@ mod tests {
     }
 
     #[test]
-    fn removes_retired_default_bypass_domain_from_saved_config() {
-        let mut unified = UnifiedLists::default();
-        unified
+    fn removes_retired_default_bypass_domain_during_schema_migration() {
+        let mut config = AppConfig::default();
+        config.schema_version = 0;
+        config
+            .unified_lists
             .direct_domains
             .push("*.LOOKLOOKFACTORY.COM".to_string());
-        assert!(sanitize_unified_lists(&mut unified));
-        assert!(!unified
+        assert!(migrate_config_schema(&mut config));
+        assert_eq!(config.schema_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert!(!config
+            .unified_lists
             .direct_domains
             .iter()
             .any(|item| item.to_ascii_lowercase().contains("looklookfactory.com")));
+    }
+
+    #[test]
+    fn preserves_user_added_retired_default_bypass_domain_after_migration() {
+        let mut config = AppConfig::default();
+        config
+            .unified_lists
+            .direct_domains
+            .push("*.looklookfactory.com".to_string());
+
+        assert!(!migrate_config_schema(&mut config));
+        let sanitized = ConfigStore::prepare_unified_lists(config.unified_lists);
+        assert!(sanitized
+            .direct_domains
+            .iter()
+            .any(|item| item == "*.looklookfactory.com"));
     }
 
     #[test]
