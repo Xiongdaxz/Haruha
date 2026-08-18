@@ -66,6 +66,63 @@ export interface DirectIpInfo {
   ipv6?: IpInfo | null;
 }
 
+export interface UpdateInfo {
+  version: string;
+  tagName: string;
+  publishedAt?: string | null;
+  notes: string[];
+  sizeBytes: number;
+  assetName: string;
+  architecture: string;
+  installKind: "portable";
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  checkedAtMs: number;
+  update?: UpdateInfo | null;
+}
+
+export interface UpdateDownloadProgress {
+  version: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  bytesPerSecond: number;
+  percent: number;
+}
+
+export interface PreparedUpdate {
+  version: string;
+  sizeBytes: number;
+  fileName: string;
+}
+
+export interface UpdateApplyResult {
+  success: boolean;
+  version: string;
+  message: string;
+  completedAtMs: number;
+}
+
+export type SoftwareUpdatePhase =
+  | "idle"
+  | "checking"
+  | "latest"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "installing"
+  | "error";
+
+export interface SoftwareUpdateState {
+  phase: SoftwareUpdatePhase;
+  checkResult: UpdateCheckResult | null;
+  progress: UpdateDownloadProgress | null;
+  prepared: PreparedUpdate | null;
+  error: string | null;
+}
+
 export interface TestResult {
   ok: boolean;
   latencyMs?: number;

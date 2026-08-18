@@ -7,12 +7,13 @@ import type { NavKey } from "../../app/types";
 
 interface SidebarProps {
   activeNav: NavKey;
+  hasUpdate: boolean;
   isCollapsed: boolean;
   onNavChange: (nav: NavKey) => void;
   onToggle: () => void;
 }
 
-export function Sidebar({ activeNav, isCollapsed, onNavChange, onToggle }: SidebarProps) {
+export function Sidebar({ activeNav, hasUpdate, isCollapsed, onNavChange, onToggle }: SidebarProps) {
   const activeNavIndex = navItems.findIndex((item) => item.key === activeNav);
   const navStyle = { "--active-nav-index": Math.max(activeNavIndex, 0) } as CSSProperties;
 
@@ -47,6 +48,7 @@ export function Sidebar({ activeNav, isCollapsed, onNavChange, onToggle }: Sideb
           >
             <item.icon size={20} />
             <span>{item.label}</span>
+            {item.key === "settings" && hasUpdate ? <i className="nav-update-dot" aria-label="发现新版本" /> : null}
           </button>
         ))}
       </nav>

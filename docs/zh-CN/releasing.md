@@ -75,6 +75,30 @@ Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
 
 把校验值保存为 `SHA256SUMS.txt` 并随 Release 上传。正式分发建议增加 Windows 代码签名；未签名时必须在发布说明中明确提示。
 
+### 生成应用内更新清单
+
+Windows 便携版资产文件名确定后，生成 `update.json`。脚本会从对应版本的 `CHANGELOG.md` 中文条目提取最多 6 条说明，并根据本地资产计算字节数和 SHA-256：
+
+```powershell
+bun run release:generate-update-manifest --tag v0.1.4 `
+  --published-at 2026-08-18T08:00:00Z `
+  --asset x64=C:\release\Haruha-x64.exe `
+  --asset ARM64=C:\release\Haruha-ARM64.exe `
+  --output update.json
+```
+
+把清单作为同一 Release 的固定名称资产上传：
+
+```powershell
+gh release upload v0.1.4 .\update.json --clobber
+```
+
+客户端默认访问 `https://github.com/Xiongdaxz/Haruha/releases/latest/download/update.json`，因此每个稳定版本只能在便携版资产已上传、最终文件名已确定后生成并上传清单。清单缺失、返回错误、JSON 无效、版本/架构/文件名/大小/SHA-256/下载地址校验失败时，客户端会自动回退 GitHub Release API。
+
+当前 `master` 不维护 GitHub 发布工作流。合并到发布分支 `main` 时，应在资产重命名完成后生成并上传 `update.json`，允许资产校验计划包含该文件，并在清单上传成功后再公开 Release；不要在 `master` 新建一份同路径工作流。
+
+本地联调可用 `HARUHA_UPDATE_MANIFEST_URL` 指向本机 HTTP 清单服务，用 `HARUHA_UPDATE_API_URL` 指向备用 API 模拟服务。正式构建的非回环下载地址必须使用 HTTPS。
+
 ## 5. 提交、标签和 GitHub Release
 
 版本提交和标签应来自同一个已验证提交：

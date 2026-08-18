@@ -75,6 +75,30 @@ Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
 
 Save the hashes as `SHA256SUMS.txt` and upload it with the Release. Code-sign public Windows binaries when possible; otherwise state clearly that they are unsigned.
 
+### Generate the in-app update manifest
+
+After the portable Windows asset names are final, generate `update.json`. The script extracts up to six Chinese notes from the matching version section in `CHANGELOG.md` and calculates each local asset's byte size and SHA-256:
+
+```powershell
+bun run release:generate-update-manifest --tag v0.1.4 `
+  --published-at 2026-08-18T08:00:00Z `
+  --asset x64=C:\release\Haruha-x64.exe `
+  --asset ARM64=C:\release\Haruha-ARM64.exe `
+  --output update.json
+```
+
+Upload the manifest under its fixed name to the same Release:
+
+```powershell
+gh release upload v0.1.4 .\update.json --clobber
+```
+
+Clients read `https://github.com/Xiongdaxz/Haruha/releases/latest/download/update.json` by default. Generate and upload the manifest only after the portable assets have been uploaded with their final names. Missing manifests, HTTP failures, invalid JSON, or failed version, architecture, filename, size, SHA-256, and download-URL checks automatically fall back to the GitHub Release API.
+
+The current `master` branch does not own the GitHub release workflow. When merging into the release-only `main` branch, generate and upload `update.json` after asset normalization, allow that file in the release asset plan, and publish only after the manifest upload succeeds. Do not add a duplicate workflow at the same path on `master`.
+
+For local integration, point `HARUHA_UPDATE_MANIFEST_URL` at a loopback HTTP manifest server and `HARUHA_UPDATE_API_URL` at a fallback API stub. Non-loopback download URLs in production builds must use HTTPS.
+
 ## 5. Commit, tag, and create the GitHub Release
 
 The version commit and tag must reference the same validated commit:

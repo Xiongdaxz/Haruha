@@ -164,7 +164,8 @@ Haruha has no telemetry or analytics module. The system overview reads aggregate
 - Windows application-traffic collection requires explicit UAC confirmation on its first start in each Haruha process. Disabling monitoring leaves the elevated helper idle without an active ETW session, and explicitly exiting the app destroys it. The main process and helper authenticate over a randomized named pipe with a session token plus collection run ID and reject remote pipe clients.
 - Configuration is stored in the current user's directory; configuration and logs must never be committed.
 - Platform adapters are the highest-risk boundary. Every write must return a concrete failure and must never claim success without evidence.
-- Automatic updates and signature verification are not currently implemented. Public installers should be signed and accompanied by SHA-256 checksums.
+- Windows portable updates first obtain the version, asset size, and SHA-256 from an HTTPS static manifest, then fall back to the GitHub Release API when the manifest is unavailable or invalid. Each channel tries the configured proxy first and then a direct connection. After download, Haruha verifies the byte size, SHA-256, and PE header before an exit-time helper replaces the executable and restores the previous version on failure.
+- The manifest and executable do not yet carry an independent digital signature. SHA-256 alone cannot protect against simultaneous compromise of the release account or manifest, so public releases should still be Windows code-signed and both manifests and assets must be distributed over HTTPS.
 
 ## 11. Extension rules
 

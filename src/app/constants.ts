@@ -32,6 +32,10 @@ export const THEME_PREFERENCE_CHANGED_EVENT = "theme-preference-changed";
 export const DEFAULT_PAC_URL = "http://127.0.0.1:18765/proxy.pac";
 export const SPEED_TEST_STORAGE_KEY = "haruha.speedTest.config";
 export const SPEED_TEST_HISTORY_STORAGE_KEY = "haruha.speedTest.history";
+export const UPDATE_AUTO_CHECK_STORAGE_KEY = "haruha.update.autoCheck";
+export const UPDATE_LAST_CHECK_STORAGE_KEY = "haruha.update.lastCheckAt";
+export const UPDATE_NOTIFIED_VERSION_STORAGE_KEY = "haruha.update.notifiedVersion";
+export const UPDATE_PENDING_VERSION_STORAGE_KEY = "haruha.update.pendingVersion";
 export const ProxyIcon = Waypoints;
 export const PacIcon = Globe2;
 
@@ -46,7 +50,7 @@ export const settingsItems = [
   { key: "appearance", label: "外观", description: "主题与预览", icon: Palette },
   { key: "unified-lists", label: "代理名单", description: "统一直连/代理名单", icon: ProxyIcon },
   { key: "config-directory", label: "配置目录", description: "查看配置、日志与缓存", icon: FolderOpen },
-  { key: "about", label: "关于", description: "版本与开源信息", icon: Info },
+  { key: "about", label: "关于", description: "版本、更新与开源信息", icon: Info },
 ] satisfies Array<{ key: SettingsKey; label: string; description: string; icon: typeof Leaf }>;
 
 export const themeOptions = [

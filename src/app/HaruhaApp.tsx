@@ -50,15 +50,18 @@ import { SplitResizer } from "../components/layout/SplitResizer";
 import { Sidebar } from "../components/layout/Sidebar";
 import { TopBar } from "../components/layout/TopBar";
 import { ConfirmDialog } from "../components/feedback/ConfirmDialog";
+import { UpdateNotice } from "../components/feedback/UpdateNotice";
 import { TrafficMonitorProvider } from "../components/data/TrafficMonitorProvider";
 import { useSpeedTestConfig } from "../hooks/useSpeedTestConfig";
 import { useSpeedTestHistory } from "../hooks/useSpeedTestHistory";
 import { useSplitLayout } from "../hooks/useSplitLayout";
 import { useThemePreference } from "../hooks/useThemePreference";
 import { useToast } from "../hooks/useToast";
+import { useSoftwareUpdater } from "../hooks/useSoftwareUpdater";
 import {
   DEFAULT_PAC_URL,
   OPEN_SOURCE_REPOSITORY_URL,
+  UPDATE_NOTIFIED_VERSION_STORAGE_KEY,
   quickSiteCategories,
   quickSites,
 } from "./constants";
@@ -175,6 +178,7 @@ export function HaruhaApp() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingMode, setPendingMode] = useState<ProxyMode | null>(null);
   const [hasModeInteraction, setHasModeInteraction] = useState(false);
+  const [isUpdateNoticeVisible, setUpdateNoticeVisible] = useState(false);
   const hasBootstrappedRef = useRef(false);
   const quickSiteIconAttemptsRef = useRef<Record<string, number>>({});
   const queuedModeChangeRef = useRef<QueuedModeChange | null>(null);
@@ -190,6 +194,23 @@ export function HaruhaApp() {
   const { setSpeedTestConfig, speedTestConfig, updateSpeedTestConfig } = useSpeedTestConfig();
   const { addSpeedTestHistory, speedTestHistory } = useSpeedTestHistory();
   const { contentStyle, splitView, startSplitResize } = useSplitLayout(activeNav);
+  const softwareUpdater = useSoftwareUpdater();
+  const availableUpdate = softwareUpdater.state.checkResult?.update ?? null;
+
+  useEffect(() => {
+    if (!availableUpdate) return;
+    const notifiedVersion = window.localStorage.getItem(UPDATE_NOTIFIED_VERSION_STORAGE_KEY);
+    if (notifiedVersion === availableUpdate.version) return;
+    window.localStorage.setItem(UPDATE_NOTIFIED_VERSION_STORAGE_KEY, availableUpdate.version);
+    setUpdateNoticeVisible(true);
+  }, [availableUpdate]);
+
+  useEffect(() => {
+    if (!softwareUpdater.lastApplyResult) return;
+    showToast(softwareUpdater.lastApplyResult.message);
+    appendLog(softwareUpdater.lastApplyResult.success ? "INFO" : "ERROR", softwareUpdater.lastApplyResult.message);
+    softwareUpdater.clearLastApplyResult();
+  }, [softwareUpdater.lastApplyResult]);
 
   useEffect(() => {
     unifiedListsRef.current = unifiedLists;
@@ -411,6 +432,12 @@ export function HaruhaApp() {
     },
     [activeNav, startNavigationTransition],
   );
+
+  const showUpdatePage = useCallback(() => {
+    setUpdateNoticeVisible(false);
+    setActiveSettings("about");
+    startNavigationTransition(() => setActiveNav("settings"));
+  }, [startNavigationTransition]);
 
   function appendLog(level: AppLogLevel, message: string) {
     const now = new Date();
@@ -1437,10 +1464,17 @@ export function HaruhaApp() {
             onOpenRepository={openSourceRepository}
             onSettingsChange={setActiveSettings}
             onThemePreferenceChange={setThemePreference}
+            onApplyUpdate={() => void softwareUpdater.apply()}
+            onCancelUpdateDownload={() => void softwareUpdater.cancelDownload()}
+            onCheckForUpdates={() => void softwareUpdater.check()}
+            onDownloadUpdate={() => void softwareUpdater.download()}
+            onUpdateAutoCheckChange={softwareUpdater.setAutoCheckEnabled}
             resolvedTheme={resolvedTheme}
             resolvedThemeLabel={resolvedThemeLabel}
+            softwareUpdate={softwareUpdater.state}
             themePreference={themePreference}
             unifiedLists={unifiedLists}
+            updateAutoCheckEnabled={softwareUpdater.autoCheckEnabled}
           />
         );
     }
@@ -1454,6 +1488,7 @@ export function HaruhaApp() {
       >
       <Sidebar
         activeNav={activeNav}
+        hasUpdate={Boolean(availableUpdate)}
         isCollapsed={isSidebarCollapsed}
         onNavChange={handleNavChange}
         onToggle={() => setSidebarCollapsed((current) => !current)}
@@ -1473,6 +1508,13 @@ export function HaruhaApp() {
           {renderActiveContent()}
         </section>
       </main>
+      {availableUpdate && isUpdateNoticeVisible ? (
+        <UpdateNotice
+          onDismiss={() => setUpdateNoticeVisible(false)}
+          onView={showUpdatePage}
+          update={availableUpdate}
+        />
+      ) : null}
       {toastMessage ? <div className="toast-message">{toastMessage}</div> : null}
       <ConfirmDialog
         confirmLabel="确认恢复"

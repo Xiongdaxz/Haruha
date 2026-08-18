@@ -1,12 +1,18 @@
 import {
+  AlertTriangle,
+  CheckCircle2,
   CircleHelp,
   Copy,
+  Download,
   ExternalLink,
   FolderOpen,
   Github,
   Info,
+  Loader2,
   Palette,
   Plus,
+  RefreshCw,
+  Rocket,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -29,7 +35,7 @@ import { defaultUnifiedLists } from "../lib/api";
 import { ruleTypeLabel } from "../lib/format";
 import { normalizeUnifiedRuleInput, unifiedRuleAddOptions } from "../lib/rules";
 import type { UnifiedRuleAddOptions } from "../lib/rules";
-import type { UnifiedLists } from "../lib/types";
+import type { SoftwareUpdateState, UnifiedLists } from "../lib/types";
 import type {
   ResolvedTheme,
   RuleListSortField,
@@ -54,6 +60,13 @@ interface SettingsPageProps {
   onChangeUnifiedLists: (next: UnifiedLists) => void;
   onSortUnifiedList: (kind: ListKind, field: RuleListSortField) => void;
   sortStates: Record<ListKind, RuleListSortState | null>;
+  softwareUpdate: SoftwareUpdateState;
+  updateAutoCheckEnabled: boolean;
+  onApplyUpdate: () => void;
+  onCancelUpdateDownload: () => void;
+  onCheckForUpdates: () => void;
+  onDownloadUpdate: () => void;
+  onUpdateAutoCheckChange: (enabled: boolean) => void;
 }
 
 type ListKind = "direct" | "proxy";
@@ -74,6 +87,13 @@ export function SettingsPage({
   onChangeUnifiedLists,
   onSortUnifiedList,
   sortStates,
+  softwareUpdate,
+  updateAutoCheckEnabled,
+  onApplyUpdate,
+  onCancelUpdateDownload,
+  onCheckForUpdates,
+  onDownloadUpdate,
+  onUpdateAutoCheckChange,
 }: SettingsPageProps) {
   const selectedThemeOption = themeOptions[activeThemeIndex];
   const previewThemeOption =
@@ -89,7 +109,9 @@ export function SettingsPage({
     settingsItems.findIndex((item) => item.key === activeSettings),
   );
   const [activeUnifiedList, setActiveUnifiedList] = useState<ListKind>("direct");
+  const [isUpdateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const activeUnifiedListIndex = activeUnifiedList === "direct" ? 0 : 1;
+  const hasAvailableUpdate = Boolean(softwareUpdate.checkResult?.update);
 
   return (
     <section className="panel settings-panel">
@@ -106,10 +128,11 @@ export function SettingsPage({
             type="button"
           >
             <item.icon aria-hidden="true" size={18} />
-            <span>
+            <span className="settings-menu-copy">
               <strong>{item.label}</strong>
               <small>{item.description}</small>
             </span>
+            {item.key === "about" && hasAvailableUpdate ? <span className="settings-update-badge">新版本</span> : null}
           </button>
         ))}
       </div>
@@ -296,48 +319,249 @@ export function SettingsPage({
               </span>
               <div>
                 <h2>关于</h2>
-                <p>版本与开源信息</p>
+                <p>版本、更新与开源信息</p>
               </div>
             </div>
 
-            <div className="about-card">
-              <div className="about-product">
-                <div>
-                  <strong>{APP_NAME}</strong>
-                  <span className="about-version">v{APP_VERSION}</span>
+            <div className="about-layout">
+              <div className="about-card about-product-card">
+                <div className="about-product-head">
+                  <div className="about-product">
+                    <div>
+                      <strong>{APP_NAME}</strong>
+                      <span className="about-version">v{APP_VERSION}</span>
+                    </div>
+                    <p>轻量、跨平台的系统代理管理工具。</p>
+                  </div>
+                  <UpdateAutoCheckToggle enabled={updateAutoCheckEnabled} onChange={onUpdateAutoCheckChange} />
                 </div>
-                <p>轻量、跨平台的系统代理管理工具。</p>
+
+                <SoftwareUpdateCard
+                  onApply={() => setUpdateConfirmOpen(true)}
+                  onCancelDownload={onCancelUpdateDownload}
+                  onCheck={onCheckForUpdates}
+                  onDownload={onDownloadUpdate}
+                  state={softwareUpdate}
+                />
               </div>
 
-              <div className="about-repository">
-                <span className="about-repository-label">
-                  <Github aria-hidden="true" size={17} />
-                  GitHub 开源仓库
-                </span>
-                <button
-                  className="about-repository-address copy-button"
-                  onClick={() => onCopy(OPEN_SOURCE_REPOSITORY_URL, "GitHub 开源地址")}
-                  title="点击复制 GitHub 开源地址"
-                  type="button"
-                >
-                  <code>{OPEN_SOURCE_REPOSITORY_URL}</code>
-                  <Copy aria-hidden="true" size={17} />
-                </button>
-              </div>
+              <div className="about-card about-repository-card">
+                <div className="about-repository">
+                  <span className="about-repository-label">
+                    <Github aria-hidden="true" size={17} />
+                    GitHub 开源仓库
+                  </span>
+                  <button
+                    className="about-repository-address copy-button"
+                    onClick={() => onCopy(OPEN_SOURCE_REPOSITORY_URL, "GitHub 开源地址")}
+                    title="点击复制 GitHub 开源地址"
+                    type="button"
+                  >
+                    <code>{OPEN_SOURCE_REPOSITORY_URL}</code>
+                    <Copy aria-hidden="true" size={17} />
+                  </button>
+                </div>
 
-              <div className="about-actions">
-                <button className="primary" onClick={onOpenRepository} type="button">
-                  <Github aria-hidden="true" size={17} />
-                  打开 GitHub
-                  <ExternalLink aria-hidden="true" size={15} />
-                </button>
+                <div className="about-actions">
+                  <button className="primary" onClick={onOpenRepository} type="button">
+                    <Github aria-hidden="true" size={17} />
+                    打开 GitHub
+                    <ExternalLink aria-hidden="true" size={15} />
+                  </button>
+                </div>
               </div>
             </div>
           </>
         ) : null}
       </div>
+      <ConfirmDialog
+        confirmLabel="重启并更新"
+        description="Haruha 将关闭并自动重新打开。当前代理配置不会被修改；如果替换失败，更新助手会恢复原版本。"
+        icon="switch"
+        isOpen={isUpdateConfirmOpen}
+        onCancel={() => setUpdateConfirmOpen(false)}
+        onConfirm={() => {
+          setUpdateConfirmOpen(false);
+          onApplyUpdate();
+        }}
+        title="立即重启并更新？"
+      />
     </section>
   );
+}
+
+interface SoftwareUpdateCardProps {
+  state: SoftwareUpdateState;
+  onApply: () => void;
+  onCancelDownload: () => void;
+  onCheck: () => void;
+  onDownload: () => void;
+}
+
+function SoftwareUpdateCard({
+  state,
+  onApply,
+  onCancelDownload,
+  onCheck,
+  onDownload,
+}: SoftwareUpdateCardProps) {
+  const update = state.checkResult?.update ?? null;
+  const checkedAt = state.checkResult?.checkedAtMs ? formatUpdateDateTime(state.checkResult.checkedAtMs) : null;
+
+  return (
+    <section className={`software-update-card phase-${state.phase}`} aria-label="软件更新">
+      {state.phase === "idle" ? (
+        <div className="software-update-empty">
+          <span>尚未检查更新</span>
+          <button className="outline compact" onClick={onCheck} type="button">
+            <RefreshCw size={16} />
+            检查更新
+          </button>
+        </div>
+      ) : null}
+
+      {state.phase === "checking" ? (
+        <div className="software-update-message is-loading">
+          <Loader2 className="spin" size={19} />
+          <span><strong>正在检查更新</strong><small>正在连接更新服务器…</small></span>
+        </div>
+      ) : null}
+
+      {state.phase === "latest" ? (
+        <div className="software-update-message is-success">
+          <CheckCircle2 size={20} />
+          <span>
+            <strong>当前已是最新版本</strong>
+            <small>{checkedAt ? `上次检查：${checkedAt}` : `当前版本 v${APP_VERSION}`}</small>
+          </span>
+          <button className="outline compact" onClick={onCheck} type="button">再次检查</button>
+        </div>
+      ) : null}
+
+      {update && ["available", "downloading", "ready", "installing"].includes(state.phase) ? (
+        <div className="software-update-release">
+          <div className="software-update-release-head">
+            <span>
+              <strong>发现新版本 v{update.version}</strong>
+              <small>
+                {formatPublishedDate(update.publishedAt)} · {formatBytes(update.sizeBytes)} · Windows {update.architecture} 便携版
+              </small>
+            </span>
+            <span className="update-recommended-tag">推荐更新</span>
+          </div>
+
+          {update.notes.length > 0 ? (
+            <ul className="software-update-notes">
+              {update.notes.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+          ) : (
+            <p className="software-update-no-notes">该版本暂未提供更新说明。</p>
+          )}
+
+          {state.phase === "downloading" ? (
+            <div className="software-update-progress">
+              <div className="software-update-progress-copy">
+                <span>正在下载并校验更新包</span>
+                <strong>{Math.round(state.progress?.percent ?? 0)}%</strong>
+              </div>
+              <span className="software-update-progress-track">
+                <i style={{ width: `${Math.max(0, Math.min(100, state.progress?.percent ?? 0))}%` }} />
+              </span>
+              <div className="software-update-progress-meta">
+                <span>
+                  {formatBytes(state.progress?.downloadedBytes ?? 0)} / {formatBytes(state.progress?.totalBytes ?? update.sizeBytes)}
+                  {state.progress?.bytesPerSecond ? ` · ${formatBytes(state.progress.bytesPerSecond)}/s` : ""}
+                </span>
+                <button className="text-button" onClick={onCancelDownload} type="button">取消</button>
+              </div>
+            </div>
+          ) : null}
+
+          {state.phase === "ready" ? (
+            <div className="software-update-ready">
+              <span><CheckCircle2 size={18} />更新包已下载，并通过 SHA-256 校验</span>
+              <button className="primary" onClick={onApply} type="button">
+                <Rocket size={17} />
+                重启并更新
+              </button>
+            </div>
+          ) : null}
+
+          {state.phase === "installing" ? (
+            <div className="software-update-message is-loading compact-message">
+              <Loader2 className="spin" size={18} />
+              <span><strong>正在启动更新助手</strong><small>Haruha 即将关闭并自动重新打开</small></span>
+            </div>
+          ) : null}
+
+          {state.phase === "available" ? (
+            <div className="software-update-actions">
+              <button className="outline" onClick={onCheck} type="button">重新检查</button>
+              <button className="primary" onClick={onDownload} type="button">
+                <Download size={17} />
+                下载更新
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {state.phase === "error" ? (
+        <div className="software-update-error">
+          <span className="software-update-error-icon"><AlertTriangle size={19} /></span>
+          <span><strong>更新没有完成</strong><small>{state.error ?? "发生未知错误"}</small></span>
+          <button
+            className="outline compact"
+            onClick={state.prepared ? onApply : update ? onDownload : onCheck}
+            type="button"
+          >
+            {state.prepared ? "重试更新" : update ? "重新下载" : "重新检查"}
+          </button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+interface UpdateAutoCheckToggleProps {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}
+
+function UpdateAutoCheckToggle({ enabled, onChange }: UpdateAutoCheckToggleProps) {
+  return (
+    <button
+      aria-checked={enabled}
+      aria-label={`自动检查更新${enabled ? "已开启，点击关闭" : "已关闭，点击开启"}`}
+      className={enabled ? "rule-enabled-switch is-enabled" : "rule-enabled-switch"}
+      onClick={() => onChange(!enabled)}
+      role="switch"
+      title={enabled ? "关闭自动检查更新" : "开启自动检查更新"}
+      type="button"
+    >
+      <span className="rule-enabled-switch-track"><span /></span>
+      <span>自动检查</span>
+    </button>
+  );
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${Math.round(value)} B`;
+}
+
+function formatPublishedDate(value: string | null | undefined) {
+  if (!value) return "发布日期未知";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "发布日期未知" : date.toLocaleDateString("zh-CN");
+}
+
+function formatUpdateDateTime(value: number) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "刚刚" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
 interface UnifiedListSectionProps {

@@ -2446,15 +2446,17 @@ dependencies = [
 
 [[package]]
 name = "proxy-manager-next"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs",
  "ferrisetw",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tiny_http",

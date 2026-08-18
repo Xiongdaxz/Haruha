@@ -21,6 +21,7 @@ mod pac_server;
 mod platform;
 mod single_instance;
 mod traffic_monitor;
+mod updater;
 
 use config::{append_app_log_line, write_pac_file, ConfigStore};
 use models::{
@@ -40,6 +41,7 @@ struct AppState {
     last_proxy_state: Mutex<Option<ProxyState>>,
     is_exiting: Mutex<bool>,
     traffic_monitor: traffic_monitor::TrafficMonitorManager,
+    updater: updater::UpdateManager,
     _single_instance: single_instance::SingleInstanceGuard,
 }
 
@@ -790,6 +792,70 @@ fn get_config_dir() -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+fn update_proxy_address(state: &tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let profile = state
+        .store
+        .lock()
+        .map_err(|_| "配置锁已损坏".to_string())?
+        .active_profile();
+    Ok((profile.mode != ProxyMode::Off).then(|| format!("http://{}", profile.address())))
+}
+
+#[tauri::command]
+async fn check_for_updates(
+    state: tauri::State<'_, AppState>,
+) -> Result<updater::UpdateCheckResult, String> {
+    let proxy_address = update_proxy_address(&state)?;
+    state
+        .updater
+        .check(proxy_address.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_update(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<updater::PreparedUpdate, String> {
+    let proxy_address = update_proxy_address(&state)?;
+    state
+        .updater
+        .download(&app, proxy_address.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_update_download(state: tauri::State<'_, AppState>) {
+    state.updater.cancel_download();
+}
+
+#[tauri::command]
+fn install_update(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let version = state
+        .updater
+        .launch_portable_installer()
+        .map_err(|error| error.to_string())?;
+    if let Ok(mut is_exiting) = state.is_exiting.lock() {
+        *is_exiting = true;
+    }
+    state.traffic_monitor.shutdown();
+    std::thread::spawn({
+        let app = app.clone();
+        move || {
+            std::thread::sleep(Duration::from_millis(300));
+            app.exit(0);
+        }
+    });
+    Ok(version)
+}
+
+#[tauri::command]
+fn get_last_update_result() -> Result<Option<updater::UpdateApplyResult>, String> {
+    updater::take_last_apply_result().map_err(|error| error.to_string())
+}
+
 fn sanitize_cache_key(value: &str) -> String {
     value
         .chars()
@@ -1196,6 +1262,9 @@ fn exit_from_tray(app: AppHandle) {
 }
 
 pub fn run() {
+    if updater::run_update_helper_if_requested() {
+        return;
+    }
     if traffic_monitor::run_helper_if_requested() {
         return;
     }
@@ -1221,6 +1290,7 @@ pub fn run() {
             last_proxy_state: Mutex::new(None),
             is_exiting: Mutex::new(false),
             traffic_monitor: traffic_monitor::TrafficMonitorManager::new(),
+            updater: updater::UpdateManager::new(),
             _single_instance: single_instance,
         })
         .invoke_handler(tauri::generate_handler![
@@ -1249,6 +1319,11 @@ pub fn run() {
             get_quick_site_icon,
             get_config_dir,
             open_config_dir,
+            check_for_updates,
+            download_update,
+            cancel_update_download,
+            install_update,
+            get_last_update_result,
             open_google,
             open_external_url,
             show_main_window_from_tray,
@@ -1290,6 +1365,7 @@ pub fn run() {
                 eprintln!("恢复代理运行服务失败: {error}");
             }
             setup_tray(app)?;
+            updater::schedule_helper_cleanup();
             Ok(())
         })
         .run(tauri::generate_context!())
