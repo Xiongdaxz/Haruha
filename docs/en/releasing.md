@@ -50,7 +50,7 @@ Do not describe a platform as “verified” merely because TypeScript or Rust c
 The repository contains two workflows:
 
 - `.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and manual dispatch. Frontend checks run on Ubuntu; Windows x64, macOS, and Linux x64/ARM64 run Rust tests, while Windows ARM64 receives a cross-compilation check.
-- `.github/workflows/release.yml` runs when a `v*` tag is pushed. Five architecture packaging jobs run in parallel, upload assets to the same draft GitHub Release, add portable Windows executables, and normalize asset names and download guidance. It can also be dispatched manually to normalize an existing draft.
+- `.github/workflows/release.yml` runs when a `v*` tag is pushed. Five architecture packaging jobs run in parallel and upload assets to the same draft GitHub Release. After all builds succeed, one final job normalizes asset names, generates `update.json`, writes bilingual notes, and publishes the Release as Latest. Manual dispatch can rebuild portable Windows assets and refresh an existing Release.
 
 Automated packaging matrix:
 
@@ -64,7 +64,7 @@ Automated packaging matrix:
 
 32-bit Windows x86 packages are intentionally omitted. The macOS Universal build contains both x64 and ARM64, so users do not choose a chip-specific package. A successful Actions build is build evidence, not runtime validation on a real device. The workflow currently has no Windows code-signing certificate, Apple Developer ID or notarization credentials, or Linux package-signing key, so automated assets are unsigned by default.
 
-GitHub sorts assets by filename, so automation uses two-digit prefixes for a stable display order and states the platform, architecture, and format in every name: `01-03` for Windows x64, `04-06` for Windows ARM64, `07-08` for macOS Universal, `09-11` for Linux x64, and `12-14` for Linux ARM64. Each Windows group is ordered Portable, NSIS, then MSI. A Portable EXE runs without installation, but still depends on the system WebView2 runtime and stores data in the user configuration directory.
+Binary asset names do not use numeric prefixes. The bilingual download table keeps the fixed order Windows x64, Windows ARM64, macOS Universal, Linux x64, and Linux ARM64; each Windows group lists Portable, NSIS, then MSI. A Portable EXE runs without installation, but still depends on the system WebView2 runtime and stores data in the user configuration directory.
 
 ## 4. Commit and trigger a tagged release
 
@@ -83,17 +83,19 @@ git tag -a v0.1.0 -m "release: v0.1.0"
 git push origin v0.1.0
 ```
 
-Do not imply that an unsigned tag is signed, and never move a published tag. After pushing the tag, inspect the `Release` workflow on GitHub Actions. A successful run creates a draft Release titled `Haruha v0.1.0`.
+Do not imply that an unsigned tag is signed, and never move a published tag. After pushing the tag, inspect the `Release` workflow on GitHub Actions. A successful run publishes `Haruha v0.1.0` as the Latest Release.
 
-## 5. Review the draft Release
+## 5. Automated publication gates
 
-Automation creates a draft only. Complete this review before clicking Publish:
+Automation keeps the Release as a draft until the final job completes all gates:
 
-1. Confirm that all five packaging jobs passed and the tag matches the versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
-2. Download all assets, record file names and byte sizes, and generate SHA-256 hashes. Save them as `SHA256SUMS.txt` and upload the file to the draft Release.
-3. Install and run on every real operating system you plan to claim as supported. Record the OS version, architecture, installation, tray, proxy switching, PAC, and exit-recovery results.
-4. Convert the matching `CHANGELOG.md` entries into Chinese and English release notes with one-to-one meaning and ordering.
-5. State signing, notarization, and runtime-validation status for every platform. Do not omit unfinished items.
+1. All five packaging jobs must pass, and the tag must match the versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+2. The Release must contain exactly 14 expected binary assets before metadata generation; their final names contain no numeric prefixes.
+3. Both Windows portable assets must expose valid GitHub SHA-256 digests. The final job uses those digests and sizes to generate and upload `update.json`.
+4. Chinese and English notes are generated from the matching `CHANGELOG.md` version with one-to-one meaning and ordering, including unsigned and real-device-validation boundaries.
+5. Only after every gate succeeds does the workflow publish the Release as Latest. A failed gate leaves the Release unpublished.
+
+Automated gates do not replace real-device testing. Before claiming a platform as formally validated, install and run the asset on that operating system and record the OS version, architecture, installation, tray, proxy switching, PAC, update, and exit-recovery results.
 
 Windows local hash example:
 
@@ -102,6 +104,30 @@ Get-FileHash .\src-tauri\target\release\Haruha.exe -Algorithm SHA256
 Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
   Get-FileHash -Algorithm SHA256
 ```
+
+### Generate the in-app update manifest
+
+After the portable Windows asset names are final, generate `update.json`. The script extracts up to six Chinese notes from the matching version section in `CHANGELOG.md` and calculates each local asset's byte size and SHA-256:
+
+```powershell
+bun run release:generate-update-manifest --tag v0.1.4 `
+  --published-at 2026-08-18T08:00:00Z `
+  --asset x64=C:\release\Haruha-x64.exe `
+  --asset ARM64=C:\release\Haruha-ARM64.exe `
+  --output update.json
+```
+
+Upload the manifest under its fixed name to the same Release:
+
+```powershell
+gh release upload v0.1.4 .\update.json --clobber
+```
+
+Clients read `https://github.com/Xiongdaxz/Haruha/releases/latest/download/update.json` by default. Generate and upload the manifest only after the portable assets have been uploaded with their final names. Missing manifests, HTTP failures, invalid JSON, or failed version, architecture, filename, size, SHA-256, and download-URL checks automatically fall back to the GitHub Release API.
+
+The product `master` branch does not own the GitHub release workflow. On the release-only `main` branch, generate and upload `update.json` after asset normalization, allow that file in the release asset plan, and publish only after the manifest upload succeeds. Do not add a duplicate workflow at the same path on `master`.
+
+For local integration, point `HARUHA_UPDATE_MANIFEST_URL` at a loopback HTTP manifest server and `HARUHA_UPDATE_API_URL` at a fallback API stub. Non-loopback download URLs in production builds must use HTTPS.
 
 ## 6. Local Windows build fallback
 

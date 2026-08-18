@@ -1,6 +1,11 @@
 const { readFile } = require("node:fs/promises");
+const {
+  createUpdateManifestFromGithubRelease,
+  extractChineseNotes,
+} = require("./generate-update-manifest.cjs");
 
 const TAG_PATTERN = /^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+const UPDATE_MANIFEST_NAME = "update.json";
 
 function buildAssetDefinitions(tag) {
   if (!TAG_PATTERN.test(tag)) {
@@ -112,11 +117,14 @@ function buildAssetDefinitions(tag) {
   ];
 }
 
-function planAssetRenames(tag, assetNames) {
+function planAssetRenames(tag, assetNames, allowedExtraNames = []) {
   const definitions = buildAssetDefinitions(tag);
   const names = new Set(assetNames);
   const knownNames = new Set(
-    definitions.flatMap(({ sources, target }) => [...sources, target]),
+    [
+      ...definitions.flatMap(({ sources, target }) => [...sources, target]),
+      ...allowedExtraNames,
+    ],
   );
   const renames = [];
   const missing = [];
@@ -254,6 +262,7 @@ function createReleaseBody(tag, changelogSource) {
     "",
     "- Windows、macOS 和 Linux 资产默认未签名。",
     "- GitHub 会在每个资产旁显示 SHA-256 摘要。",
+    "- `update.json` 是应用内更新元数据，不是安装包。",
     "- 自动构建成功不代表对应平台的系统代理行为已经完成正式验证。",
     "",
     "### English",
@@ -276,8 +285,41 @@ function createReleaseBody(tag, changelogSource) {
     "",
     "- Windows, macOS, and Linux assets are unsigned by default.",
     "- GitHub displays a SHA-256 digest next to every asset.",
+    "- `update.json` contains in-app update metadata and is not an installer.",
     "- A successful automated build does not mean system-proxy behavior has been formally validated on that platform.",
   ].join("\n");
+}
+
+function createUpdateManifestAsset({
+  tag,
+  changelogSource,
+  release,
+  releaseAssets,
+  repository,
+}) {
+  const manifest = createUpdateManifestFromGithubRelease({
+    release: {
+      ...release,
+      tag_name: tag,
+      published_at:
+        release.published_at || release.created_at || new Date().toISOString(),
+    },
+    releaseAssets,
+    notes: extractChineseNotes(changelogSource, tag),
+    repository,
+  });
+  if (manifest.assets.length !== 2) {
+    throw new Error(
+      "Update manifest requires both Windows portable assets; found " +
+        manifest.assets.length +
+        ".",
+    );
+  }
+  return {
+    name: UPDATE_MANIFEST_NAME,
+    data: Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8"),
+    manifest,
+  };
 }
 
 async function normalizeGithubReleaseAssets({ github, context, core }) {
@@ -310,6 +352,7 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
   const plan = planAssetRenames(
     tag,
     releaseAssets.map(({ name }) => name),
+    [UPDATE_MANIFEST_NAME],
   );
 
   if (
@@ -342,6 +385,53 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
     core.info("Renamed " + source + " -> " + target);
   }
 
+  const existingManifest = releaseAssets.find(
+    ({ name }) => name === UPDATE_MANIFEST_NAME,
+  );
+  if (existingManifest) {
+    await github.rest.repos.deleteReleaseAsset({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      asset_id: existingManifest.id,
+    });
+    core.info("Removed existing " + UPDATE_MANIFEST_NAME + ".");
+  }
+
+  const normalizedReleaseAssets = await github.paginate(
+    github.rest.repos.listReleaseAssets,
+    {
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      release_id: release.id,
+      per_page: 100,
+    },
+  );
+  const updateManifest = createUpdateManifestAsset({
+    tag,
+    changelogSource,
+    release,
+    releaseAssets: normalizedReleaseAssets,
+    repository: context.repo.owner + "/" + context.repo.repo,
+  });
+  await github.rest.repos.uploadReleaseAsset({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    release_id: release.id,
+    name: updateManifest.name,
+    data: updateManifest.data,
+    headers: {
+      "content-type": "application/json",
+      "content-length": updateManifest.data.length,
+    },
+  });
+  core.info(
+    "Uploaded " +
+      UPDATE_MANIFEST_NAME +
+      " with " +
+      updateManifest.manifest.assets.length +
+      " Windows portable assets.",
+  );
+
   await github.rest.repos.updateRelease({
     owner: context.repo.owner,
     repo: context.repo.repo,
@@ -357,7 +447,9 @@ async function normalizeGithubReleaseAssets({ github, context, core }) {
   core.info(
     "Normalized and published " +
       plan.definitions.length +
-      " assets for release " +
+      " binary assets plus " +
+      UPDATE_MANIFEST_NAME +
+      " for release " +
       tag +
       ".",
   );
@@ -368,3 +460,4 @@ module.exports.buildAssetDefinitions = buildAssetDefinitions;
 module.exports.planAssetRenames = planAssetRenames;
 module.exports.extractChangelogEntries = extractChangelogEntries;
 module.exports.createReleaseBody = createReleaseBody;
+module.exports.createUpdateManifestAsset = createUpdateManifestAsset;

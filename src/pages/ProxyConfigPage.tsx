@@ -109,7 +109,12 @@ export function ProxyConfigPage({
   return (
     <>
       <section className="panel proxy-panel">
-        <h2>代理配置</h2>
+        <div className="proxy-title">
+          <span className="proxy-title-icon" aria-hidden="true">
+            <ProxyIcon size={18} />
+          </span>
+          <h2>代理配置</h2>
+        </div>
         <label>
           代理地址
           <input

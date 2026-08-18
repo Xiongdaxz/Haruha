@@ -217,7 +217,7 @@ jobs:
           gh release upload $tag $destination --repo $env:GITHUB_REPOSITORY --clobber
 
   normalize-release:
-    name: Normalize assets, notes, and publish Latest
+    name: Normalize assets, update manifest, notes, and publish Latest
     needs: [build, windows_portable]
     if: ${{ always() && ((github.event_name == 'push' && github.ref_type == 'tag' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.windows_portable.result == 'success')) }}
     runs-on: ubuntu-22.04
@@ -226,7 +226,7 @@ jobs:
       - name: Checkout release tooling
         uses: actions/checkout@v5
 
-      - name: Normalize and publish release
+      - name: Normalize assets, upload update manifest, and publish release
         uses: actions/github-script@v8
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

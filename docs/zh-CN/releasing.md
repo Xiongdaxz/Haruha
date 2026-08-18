@@ -50,7 +50,7 @@ git diff --check
 仓库包含两个工作流：
 
 - `.github/workflows/ci.yml`：在推送到 `main`、Pull Request 和手动触发时运行。前端检查在 Ubuntu 执行；Windows x64、macOS、Linux x64/ARM64 运行 Rust 测试，Windows ARM64 执行交叉编译检查。
-- `.github/workflows/release.yml`：推送 `v*` 标签时运行。5 个架构打包任务并行执行，把资产上传到同一个 GitHub 草稿 Release，补充 Windows 免安装版，并统一资产名称和下载说明；也可手动触发来整理已有草稿。
+- `.github/workflows/release.yml`：推送 `v*` 标签时运行。5 个架构打包任务并行执行，把资产上传到同一个 GitHub 草稿 Release；全部构建成功后，由唯一的最终任务统一资产名称、生成 `update.json`、写入双语说明并公开为 Latest。手动触发时可重建 Windows 免安装版并刷新已有 Release。
 
 自动打包矩阵：
 
@@ -64,7 +64,7 @@ git diff --check
 
 Windows 不再提供 32 位 x86 包。macOS 的 Universal 包同时包含 x64 和 ARM64，不需要用户选择芯片版本。Actions runner 上成功编译属于“构建证据”，不等于真实设备上的“运行验证”。当前工作流也没有配置 Windows 代码签名证书、Apple Developer ID、公证凭据或 Linux 包签名密钥，因此自动资产默认未签名。
 
-GitHub 会按文件名排序，因此自动化使用两位序号固定展示顺序，并在每个文件名中明确写出平台、架构和格式：`01-03` 为 Windows x64，`04-06` 为 Windows ARM64，`07-08` 为 macOS Universal，`09-11` 为 Linux x64，`12-14` 为 Linux ARM64。Windows 每组都按 Portable、NSIS、MSI 排列；Portable EXE 可以直接运行，但仍依赖系统 WebView2，并会在用户配置目录保存数据。
+二进制资产文件名不使用数字序号。双语下载表固定按 Windows x64、Windows ARM64、macOS Universal、Linux x64、Linux ARM64 排列；Windows 每组依次列出 Portable、NSIS、MSI。Portable EXE 可以直接运行，但仍依赖系统 WebView2，并会在用户配置目录保存数据。
 
 ## 4. 提交并触发标签发布
 
@@ -83,17 +83,19 @@ git tag -a v0.1.0 -m "release: v0.1.0"
 git push origin v0.1.0
 ```
 
-不要伪装成已签名，也不要重复移动已经公开的标签。标签推送后，在 GitHub 的 Actions 页面检查 `Release` 工作流；成功后会出现标题为 `Haruha v0.1.0` 的草稿 Release。
+不要伪装成已签名，也不要重复移动已经公开的标签。标签推送后，在 GitHub 的 Actions 页面检查 `Release` 工作流；成功后会把 `Haruha v0.1.0` 公开为 Latest Release。
 
-## 5. 审核草稿 Release
+## 5. 自动公开门禁
 
-自动化只创建草稿，人工核对完成后再点击发布：
+自动化会让 Release 保持草稿，直到最终任务完成全部门禁：
 
-1. 确认 5 个打包 job 全部成功，标签版本与 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 一致。
-2. 下载所有资产，记录文件名、字节数并生成 SHA-256。把结果保存为 `SHA256SUMS.txt` 并上传到草稿 Release。
-3. 在计划声明支持的真实系统上安装并运行，记录已验证的操作系统版本、架构、安装、托盘、代理切换、PAC 和退出恢复结果。
-4. 将 `CHANGELOG.md` 的对应内容整理成含义和顺序一一对应的中英文发布说明。
-5. 明确标注每个平台的签名、公证和运行验证状态；未完成的项目不能省略。
+1. 5 个打包 job 必须全部成功，标签版本必须与 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 一致。
+2. 生成更新元数据前，Release 必须恰好包含预期的 14 个二进制资产，最终文件名不得带数字序号。
+3. 两个 Windows 免安装资产必须带有效的 GitHub SHA-256 摘要；最终任务用其摘要与字节数生成并上传 `update.json`。
+4. 从 `CHANGELOG.md` 对应版本生成含义和顺序一一对应的中英文说明，并明确未签名与真机验证边界。
+5. 只有全部门禁成功后，工作流才把 Release 公开为 Latest；任一门禁失败都会保持未公开状态。
+
+自动门禁不能代替真机测试。声明某个平台已经正式验证前，仍需在该系统上安装运行，并记录操作系统版本、架构、安装、托盘、代理切换、PAC、应用内更新和退出恢复结果。
 
 Windows 本地哈希示例：
 
@@ -102,6 +104,30 @@ Get-FileHash .\src-tauri\target\release\Haruha.exe -Algorithm SHA256
 Get-ChildItem .\src-tauri\target\release\bundle\msi\*.msi |
   Get-FileHash -Algorithm SHA256
 ```
+
+### 生成应用内更新清单
+
+Windows 便携版资产文件名确定后，生成 `update.json`。脚本会从对应版本的 `CHANGELOG.md` 中文条目提取最多 6 条说明，并根据本地资产计算字节数和 SHA-256：
+
+```powershell
+bun run release:generate-update-manifest --tag v0.1.4 `
+  --published-at 2026-08-18T08:00:00Z `
+  --asset x64=C:\release\Haruha-x64.exe `
+  --asset ARM64=C:\release\Haruha-ARM64.exe `
+  --output update.json
+```
+
+把清单作为同一 Release 的固定名称资产上传：
+
+```powershell
+gh release upload v0.1.4 .\update.json --clobber
+```
+
+客户端默认访问 `https://github.com/Xiongdaxz/Haruha/releases/latest/download/update.json`，因此每个稳定版本只能在便携版资产已上传、最终文件名已确定后生成并上传清单。清单缺失、返回错误、JSON 无效、版本/架构/文件名/大小/SHA-256/下载地址校验失败时，客户端会自动回退 GitHub Release API。
+
+产品分支 `master` 不维护 GitHub 发布工作流。在发布分支 `main` 上，应在资产重命名完成后生成并上传 `update.json`，允许资产校验计划包含该文件，并在清单上传成功后再公开 Release；不要在 `master` 新建一份同路径工作流。
+
+本地联调可用 `HARUHA_UPDATE_MANIFEST_URL` 指向本机 HTTP 清单服务，用 `HARUHA_UPDATE_API_URL` 指向备用 API 模拟服务。正式构建的非回环下载地址必须使用 HTTPS。
 
 ## 6. Windows 本地构建备用流程
 

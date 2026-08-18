@@ -24,17 +24,28 @@ async function testBilingualReleaseNotes() {
   assert.doesNotMatch(body, /\b(?:0[1-9]|1[0-4])-Haruha-/);
   assert.match(body, /默认未签名/);
   assert.match(body, /unsigned by default/);
+  assert.match(body, /update\.json.*不是安装包/);
+  assert.match(body, /update\.json.*not an installer/);
 }
 
 async function testAutomaticLatestPublication() {
   const tag = "v0.1.2";
   const definitions = normalizeRelease.buildAssetDefinitions(tag);
-  const release = { id: 12, draft: true, tag_name: tag };
+  const release = {
+    id: 12,
+    draft: true,
+    tag_name: tag,
+    created_at: "2026-08-18T08:00:00Z",
+  };
   const assets = definitions.map(({ sources }, index) => ({
     id: index + 100,
     name: sources[0],
+    size: index + 1000,
+    digest: `sha256:${String(index).padStart(64, "0")}`,
+    browser_download_url: `https://github.com/Xiongdaxz/Haruha/releases/download/${tag}/${sources[0]}`,
   }));
   const renamed = [];
+  let uploadedManifest;
   let updateReleaseInput;
 
   const repos = {
@@ -42,6 +53,12 @@ async function testAutomaticLatestPublication() {
     listReleaseAssets() {},
     async updateReleaseAsset(input) {
       renamed.push(input);
+      const asset = assets.find(({ id }) => id === input.asset_id);
+      asset.name = input.name;
+      asset.browser_download_url = `https://github.com/Xiongdaxz/Haruha/releases/download/${tag}/${input.name}`;
+    },
+    async uploadReleaseAsset(input) {
+      uploadedManifest = input;
     },
     async updateRelease(input) {
       updateReleaseInput = input;
@@ -67,6 +84,13 @@ async function testAutomaticLatestPublication() {
   assert.equal(updateReleaseInput.prerelease, false);
   assert.equal(updateReleaseInput.make_latest, "true");
   assert.match(updateReleaseInput.body, /Haruha v0\.1\.2/);
+  assert.equal(uploadedManifest.name, "update.json");
+  assert.equal(uploadedManifest.headers["content-type"], "application/json");
+  const manifest = JSON.parse(uploadedManifest.data.toString("utf8"));
+  assert.deepEqual(
+    manifest.assets.map(({ architecture }) => architecture),
+    ["x64", "ARM64"],
+  );
 }
 
 function testLegacyNumberedAssetRenames() {
@@ -75,7 +99,11 @@ function testLegacyNumberedAssetRenames() {
   const legacyNames = definitions.map(
     ({ sources }) => sources[sources.length - 1],
   );
-  const plan = normalizeRelease.planAssetRenames(tag, legacyNames);
+  const plan = normalizeRelease.planAssetRenames(
+    tag,
+    [...legacyNames, "update.json"],
+    ["update.json"],
+  );
 
   assert.equal(plan.missing.length, 0);
   assert.equal(plan.conflicts.length, 0);

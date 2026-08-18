@@ -6,6 +6,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [
 
 ## Unreleased
 
+## 0.1.4 - 2026-08-18
+
+### 中文
+
+- 新增 Windows 便携版应用内更新：优先读取不消耗 GitHub API 额度的静态清单，并以 GitHub Release API 兜底；支持自动与手动检查、下载进度、SHA-256 校验、退出替换、失败回滚和更新结果提示，各渠道的代理请求失败时会自动回退直连。
+
+### English
+
+- Added in-app updates for Windows portable builds, preferring a static manifest that does not consume GitHub API quota and falling back to the GitHub Release API; the updater supports automatic and manual checks, download progress, SHA-256 verification, exit-time replacement, rollback, and result feedback, with proxy-to-direct fallback within either channel.
+
 ## 0.1.3 - 2026-08-17
 
 ### 中文

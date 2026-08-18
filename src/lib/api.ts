@@ -17,9 +17,15 @@ import type {
   TrafficMonitorCapability,
   TrafficMonitorSnapshot,
   UnifiedLists,
+  UpdateApplyResult,
+  UpdateCheckResult,
+  UpdateDownloadProgress,
+  PreparedUpdate,
 } from "./types";
+import packageMetadata from "../../package.json";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
+const mockUpdateMode = !isTauri ? new URLSearchParams(window.location.search).get("mockUpdate") : null;
 const mockTrafficApplicationLimit = (() => {
   if (isTauri) return undefined;
   const rawLimit = new URLSearchParams(window.location.search).get("mockTrafficApplications");
@@ -367,6 +373,82 @@ export async function openConfigDirectory(): Promise<void> {
 export async function getConfigDirectory(): Promise<string> {
   if (!isTauri) return "%APPDATA%\\Haruha";
   return invoke<string>("get_config_dir");
+}
+
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  if (!isTauri) {
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    if (mockUpdateMode === "error") throw new Error("无法连接更新服务器，请检查网络后重试");
+    const checkedAtMs = Date.now();
+    if (mockUpdateMode === "available") {
+      return {
+        currentVersion: packageMetadata.version,
+        latestVersion: "0.1.4",
+        checkedAtMs,
+        update: {
+          version: "0.1.4",
+          tagName: "v0.1.4",
+          publishedAt: "2026-08-18T02:30:00Z",
+          notes: ["支持便携版应用内更新", "完善 IPv4 与 IPv6 出口展示", "优化托盘与代理状态体验"],
+          sizeBytes: 18_600_000,
+          assetName: "Haruha-v0.1.4-Windows-x64-Portable.exe",
+          architecture: "x64",
+          installKind: "portable",
+        },
+      };
+    }
+    return {
+      currentVersion: packageMetadata.version,
+      latestVersion: packageMetadata.version,
+      checkedAtMs,
+      update: null,
+    };
+  }
+  return invoke<UpdateCheckResult>("check_for_updates");
+}
+
+export async function downloadUpdate(
+  onProgress?: (progress: UpdateDownloadProgress) => void,
+): Promise<PreparedUpdate> {
+  if (!isTauri) {
+    const totalBytes = 18_600_000;
+    const startedAt = performance.now();
+    for (const percent of [4, 12, 24, 39, 55, 68, 81, 92, 100]) {
+      await new Promise((resolve) => window.setTimeout(resolve, 170));
+      const downloadedBytes = Math.round((totalBytes * percent) / 100);
+      onProgress?.({
+        version: "0.1.4",
+        downloadedBytes,
+        totalBytes,
+        bytesPerSecond: downloadedBytes / Math.max((performance.now() - startedAt) / 1000, 0.001),
+        percent,
+      });
+    }
+    return { version: "0.1.4", sizeBytes: totalBytes, fileName: "Haruha-v0.1.4-Windows-x64-Portable.exe" };
+  }
+  const unlisten = await listen<UpdateDownloadProgress>("update-download-progress", (event) => {
+    onProgress?.(event.payload);
+  });
+  try {
+    return await invoke<PreparedUpdate>("download_update");
+  } finally {
+    unlisten();
+  }
+}
+
+export async function cancelUpdateDownload(): Promise<void> {
+  if (!isTauri) return;
+  return invoke<void>("cancel_update_download");
+}
+
+export async function installUpdate(): Promise<string> {
+  if (!isTauri) return "0.1.4";
+  return invoke<string>("install_update");
+}
+
+export async function getLastUpdateResult(): Promise<UpdateApplyResult | null> {
+  if (!isTauri) return null;
+  return invoke<UpdateApplyResult | null>("get_last_update_result");
 }
 
 export async function showMainWindowFromTray(): Promise<void> {
